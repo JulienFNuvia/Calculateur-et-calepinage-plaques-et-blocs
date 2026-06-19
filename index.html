@@ -765,6 +765,8 @@
                 <button id="draw-tool-select"  class="draw-tool-btn" title="Sélection (S)">⬡ Sél.</button>
                 <button id="draw-tool-polyline" class="draw-tool-btn" title="Polyligne (L)">╱ Polyligne</button>
                 <button id="draw-tool-circle"  class="draw-tool-btn" title="Cercle (C)">○ Cercle</button>
+                <button id="draw-tool-cstr-line"  class="draw-tool-btn" title="Trait de construction (I)">⋯ Trait cons.</button>
+                <button id="draw-tool-cstr-circle" class="draw-tool-btn" title="Cercle de construction (U)">◌ Cercle cons.</button>
               </div>
               <div class="draw-tool-sep"></div>
               <button id="draw-tool-ortho" class="draw-tool-btn" title="Mode ortho H/V (O)">⊢ Ortho</button>
@@ -781,14 +783,21 @@
               <svg id="draw-svg" style="width:100%;height:100%;cursor:crosshair;display:block;border-radius:6px" aria-label="Zone de dessin"></svg>
             </div>
             <!-- Barre de statut -->
-            <div id="draw-status-bar" class="draw-status">Cliquez pour placer le premier sommet.</div>
+            <div id="draw-status-bar" class="draw-status">
+              <span id="draw-status-text">Cliquez pour placer le premier sommet.</span>
+              <div class="draw-seg-inputs" aria-label="Contraintes segment">
+                <label>ΔX <input id="draw-input-dx" type="text" inputmode="decimal" placeholder="auto" /></label>
+                <label>ΔY <input id="draw-input-dy" type="text" inputmode="decimal" placeholder="auto" /></label>
+                <label>θ <input id="draw-input-ang" type="text" inputmode="decimal" placeholder="auto" /></label>
+              </div>
+            </div>
             <!-- Pied de page -->
             <div class="draw-footer">
               <button id="draw-clear-btn"     class="btn btn-danger"  style="font-size:0.85rem">Effacer tout</button>
               <button id="draw-undo-pt-btn"   class="btn"             style="font-size:0.85rem">↩ Annuler pt</button>
               <button id="draw-close-poly-btn" class="btn"            style="font-size:0.85rem">Fermer contour</button>
               <span style="flex:1"></span>
-              <span class="draw-footer-hint">Clic : sommet&nbsp;|&nbsp;Dbl-clic / clic 1er pt : fermer&nbsp;|&nbsp;Molette : zoom&nbsp;|&nbsp;Clic-droit/drag : pan&nbsp;|&nbsp;O : ortho&nbsp;|&nbsp;Esc : annuler&nbsp;|&nbsp;Suppr : effacer sél.</span>
+              <span class="draw-footer-hint">Clic : sommet&nbsp;|&nbsp;Dbl-clic / clic 1er pt : fermer&nbsp;|&nbsp;Molette : zoom&nbsp;|&nbsp;Clic-droit/drag : pan&nbsp;|&nbsp;O : ortho&nbsp;|&nbsp;I : trait construction&nbsp;|&nbsp;U : cercle construction&nbsp;|&nbsp;Esc : annuler&nbsp;|&nbsp;Suppr : effacer sél.</span>
               <span style="flex:1"></span>
               <button id="draw-apply-btn" class="btn btn-primary" style="font-size:0.9rem;padding:10px 22px">✓ Appliquer comme dalle</button>
             </div>

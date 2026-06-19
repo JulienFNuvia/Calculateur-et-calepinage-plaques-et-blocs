@@ -250,6 +250,8 @@ const state = {
     contourPoints: [],
     contourClosed: false,
     contourSource: 'rect',
+    constructionLines: [],
+    constructionCircles: [],
   },
 };
 
@@ -2039,6 +2041,8 @@ function _ensureBlocContourDefaults() {
   if (!Array.isArray(state.bloc.contourPoints)) state.bloc.contourPoints = [];
   if (typeof state.bloc.contourClosed !== 'boolean') state.bloc.contourClosed = false;
   if (!state.bloc.contourSource) state.bloc.contourSource = 'rect';
+  if (!Array.isArray(state.bloc.constructionLines)) state.bloc.constructionLines = [];
+  if (!Array.isArray(state.bloc.constructionCircles)) state.bloc.constructionCircles = [];
   if (state.bloc.contourSource === 'rect' && state.bloc.contourPoints.length === 0) {
     state.bloc.contourPoints = [
       { x: 0, y: 0 },
@@ -2096,6 +2100,31 @@ function _renderBlocContourEditor() {
   const oy = (hvb - spanY * scale) / 2 - bb.minY * scale;
 
   const toV = (p) => ({ x: p.x * scale + ox, y: p.y * scale + oy });
+
+  const cLines = Array.isArray(state.bloc.constructionLines) ? state.bloc.constructionLines : [];
+  cLines.forEach((ln) => {
+    const a = toV({ x: Number(ln.x1) || 0, y: Number(ln.y1) || 0 });
+    const b = toV({ x: Number(ln.x2) || 0, y: Number(ln.y2) || 0 });
+    svg.appendChild(createSvg('line', {
+      x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+      stroke: '#8b63b7', 'stroke-width': 1.2, 'stroke-dasharray': '6 4', opacity: 0.9,
+    }));
+  });
+  const cCircs = Array.isArray(state.bloc.constructionCircles) ? state.bloc.constructionCircles : [];
+  cCircs.forEach((cc) => {
+    const c = toV({ x: Number(cc.cx) || 0, y: Number(cc.cy) || 0 });
+    svg.appendChild(createSvg('circle', {
+      cx: c.x,
+      cy: c.y,
+      r: Math.max(1, (Number(cc.r) || 0) * scale),
+      fill: 'none',
+      stroke: '#8b63b7',
+      'stroke-width': 1.1,
+      'stroke-dasharray': '5 4',
+      opacity: 0.9,
+    }));
+  });
+
   const d = pts.map((p, i) => {
     const v = toV(p);
     return `${i === 0 ? 'M' : 'L'} ${v.x.toFixed(1)} ${v.y.toFixed(1)}`;
@@ -6245,6 +6274,8 @@ function _applyBlocAndRefresh(forceRecalepinage = false) {
     { x: state.bloc.width, y: state.bloc.depth },
     { x: 0, y: state.bloc.depth },
   ];
+  state.bloc.constructionLines = [];
+  state.bloc.constructionCircles = [];
 
   state.couches.forEach(syncSalleSurfaceFromBloc);
   state.plansSpeciaux.forEach(syncSalleSurfaceFromBloc);
@@ -6277,6 +6308,8 @@ function _setupBlocContourEditor() {
     state.bloc.contourPoints = [];
     state.bloc.contourClosed = false;
     state.bloc.contourSource = 'drawn';
+    state.bloc.constructionLines = [];
+    state.bloc.constructionCircles = [];
     _renderBlocContourEditor();
     renderPlan();
     render3D();
@@ -6291,7 +6324,7 @@ _setupBlocContourEditor();
 // ── Éditeur géométrie de dalle — moteur CAO 2D (modal) ───────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 const _drawEd = {
-  tool: 'polyline',      // 'select' | 'polyline' | 'circle'
+  tool: 'polyline',      // 'select' | 'polyline' | 'circle' | 'cstr-line' | 'cstr-circle'
   ortho: false,
   snapGrid: true,
   snapPoints: true,
@@ -6301,8 +6334,12 @@ const _drawEd = {
   panY: 40,
   polylines: [],         // [{pts:[{x,y},...], closed:bool}]
   circles: [],           // [{cx,cy,r}]
+  constructionLines: [], // [{x1,y1,x2,y2}]
+  constructionCircles: [], // [{cx,cy,r}]
   activePolyIdx: -1,     // index of in-progress polyline
   _circCenter: null,     // first click of circle tool
+  _cstrLineStart: null,
+  _cstrCircleCenter: null,
   tmpPt: null,           // current snap-preview point (mm)
   panDrag: null,         // {active,dragged,startX,startY,startPanX,startPanY}
   ptDrag: null,          // {active,dragged,pIdx,ptIdx} — drag d'un sommet
@@ -6313,10 +6350,15 @@ const _drawEd = {
 function _drawEd_open() {
   _drawEd.polylines = [];
   _drawEd.circles = [];
+  _drawEd.constructionLines = [];
+  _drawEd.constructionCircles = [];
   _drawEd.activePolyIdx = -1;
   _drawEd._circCenter = null;
+  _drawEd._cstrLineStart = null;
+  _drawEd._cstrCircleCenter = null;
   _drawEd.tmpPt = null;
   _drawEd.selectedEl = null;
+  _drawEd_clearSegInputs();
 
   // Preload existing contour as editable polyline
   _ensureBlocContourDefaults();
@@ -6325,6 +6367,17 @@ function _drawEd_open() {
     _drawEd.polylines.push({ pts: pts.map(p => ({ x: p.x, y: p.y })), closed: state.bloc.contourClosed });
     if (!state.bloc.contourClosed) _drawEd.activePolyIdx = 0;
   }
+  _drawEd.constructionLines = (state.bloc.constructionLines || []).map(l => ({
+    x1: Number(l.x1) || 0,
+    y1: Number(l.y1) || 0,
+    x2: Number(l.x2) || 0,
+    y2: Number(l.y2) || 0,
+  }));
+  _drawEd.constructionCircles = (state.bloc.constructionCircles || []).map(c => ({
+    cx: Number(c.cx) || 0,
+    cy: Number(c.cy) || 0,
+    r: Math.max(0, Number(c.r) || 0),
+  }));
 
   const bbox = _drawEd_getBbox() || {
     minX: 0, minY: 0,
@@ -6342,12 +6395,15 @@ function _drawEd_open() {
 }
 
 function _drawEd_close() {
+  _drawEd_clearSegInputs();
   document.getElementById('modal-draw-overlay').hidden = true;
 }
 
 function _drawEd_getBbox() {
   const pts = _drawEd.polylines.flatMap(pl => pl.pts)
-    .concat(_drawEd.circles.flatMap(c => [{ x: c.cx - c.r, y: c.cy - c.r }, { x: c.cx + c.r, y: c.cy + c.r }]));
+    .concat(_drawEd.circles.flatMap(c => [{ x: c.cx - c.r, y: c.cy - c.r }, { x: c.cx + c.r, y: c.cy + c.r }]))
+    .concat(_drawEd.constructionLines.flatMap(l => [{ x: l.x1, y: l.y1 }, { x: l.x2, y: l.y2 }]))
+    .concat(_drawEd.constructionCircles.flatMap(c => [{ x: c.cx - c.r, y: c.cy - c.r }, { x: c.cx + c.r, y: c.cy + c.r }]));
   if (!pts.length) return null;
   return {
     minX: Math.min(...pts.map(p => p.x)),
@@ -6390,6 +6446,16 @@ function _drawEd_getSnap(rawX, rawY) {
     for (const pl of _drawEd.polylines)
       for (const p of pl.pts) { const d = Math.hypot(p.x - mm.x, p.y - mm.y); if (d < bestD) { bestD = d; best = p; } }
     for (const c of _drawEd.circles) { const d = Math.hypot(c.cx - mm.x, c.cy - mm.y); if (d < bestD) { bestD = d; best = { x: c.cx, y: c.cy }; } }
+    for (const l of _drawEd.constructionLines) {
+      const d1 = Math.hypot(l.x1 - mm.x, l.y1 - mm.y);
+      if (d1 < bestD) { bestD = d1; best = { x: l.x1, y: l.y1 }; }
+      const d2 = Math.hypot(l.x2 - mm.x, l.y2 - mm.y);
+      if (d2 < bestD) { bestD = d2; best = { x: l.x2, y: l.y2 }; }
+    }
+    for (const c of _drawEd.constructionCircles) {
+      const d = Math.hypot(c.cx - mm.x, c.cy - mm.y);
+      if (d < bestD) { bestD = d; best = { x: c.cx, y: c.cy }; }
+    }
     if (best) return { x: best.x, y: best.y, snap: 'point' };
   }
   // Grid snap
@@ -6411,6 +6477,94 @@ function _drawEd_activePts() {
     ? _drawEd.polylines[_drawEd.activePolyIdx].pts : null;
 }
 
+function _drawEd_parseMaybeNum(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const n = parseFloat(s.replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
+
+function _drawEd_readSegInputs() {
+  return {
+    dx: _drawEd_parseMaybeNum(document.getElementById('draw-input-dx')?.value),
+    dy: _drawEd_parseMaybeNum(document.getElementById('draw-input-dy')?.value),
+    ang: _drawEd_parseMaybeNum(document.getElementById('draw-input-ang')?.value),
+  };
+}
+
+function _drawEd_isTypingInSegInput() {
+  const ae = document.activeElement;
+  return !!ae && ae.id && (ae.id === 'draw-input-dx' || ae.id === 'draw-input-dy' || ae.id === 'draw-input-ang');
+}
+
+function _drawEd_setSegInputPlaceholders(dx, dy, ang) {
+  const dxEl = document.getElementById('draw-input-dx');
+  const dyEl = document.getElementById('draw-input-dy');
+  const anEl = document.getElementById('draw-input-ang');
+  if (dxEl) dxEl.placeholder = Number.isFinite(dx) ? String(Math.round(dx)) : 'auto';
+  if (dyEl) dyEl.placeholder = Number.isFinite(dy) ? String(Math.round(dy)) : 'auto';
+  if (anEl) anEl.placeholder = Number.isFinite(ang) ? String(Math.round(ang)) : 'auto';
+}
+
+function _drawEd_syncSegInputState() {
+  const enable = _drawEd.tool === 'polyline' && !!_drawEd_activePts() && _drawEd_activePts().length > 0;
+  ['draw-input-dx', 'draw-input-dy', 'draw-input-ang'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !enable;
+  });
+}
+
+function _drawEd_clearSegInputs() {
+  ['draw-input-dx', 'draw-input-dy', 'draw-input-ang'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  _drawEd_setSegInputPlaceholders(NaN, NaN, NaN);
+}
+
+function _drawEd_applySegmentConstraints(pt) {
+  const aPts = _drawEd_activePts();
+  if (!aPts || aPts.length === 0 || _drawEd.tool !== 'polyline') return pt;
+  const last = aPts[aPts.length - 1];
+  const inVals = _drawEd_readSegInputs();
+
+  const dxMouse = pt.x - last.x;
+  const dyMouse = pt.y - last.y;
+  const aMouse = Math.atan2(dyMouse, dxMouse) * 180 / Math.PI;
+  _drawEd_setSegInputPlaceholders(dxMouse, dyMouse, aMouse);
+
+  const hasDx = inVals.dx !== null;
+  const hasDy = inVals.dy !== null;
+  const hasAng = inVals.ang !== null;
+  if (!hasDx && !hasDy && !hasAng) return pt;
+
+  let dx = hasDx ? inVals.dx : dxMouse;
+  let dy = hasDy ? inVals.dy : dyMouse;
+
+  if (hasAng) {
+    const rad = inVals.ang * Math.PI / 180;
+    const c = Math.cos(rad);
+    const s = Math.sin(rad);
+    if (hasDx && !hasDy) {
+      if (Math.abs(c) > 1e-9) {
+        const len = dx / c;
+        dy = len * s;
+      }
+    } else if (hasDy && !hasDx) {
+      if (Math.abs(s) > 1e-9) {
+        const len = dy / s;
+        dx = len * c;
+      }
+    } else if (!hasDx && !hasDy) {
+      const len = Math.hypot(dxMouse, dyMouse);
+      dx = len * c;
+      dy = len * s;
+    }
+  }
+
+  return { x: last.x + dx, y: last.y + dy, snap: 'manual' };
+}
+
 const _dNS = tag => document.createElementNS('http://www.w3.org/2000/svg', tag);
 function _drawEd_dot(x, y, r, fill, stroke, sw) {
   const c = _dNS('circle');
@@ -6424,6 +6578,7 @@ function _drawEd_dot(x, y, r, fill, stroke, sw) {
 function _drawEd_render() {
   const svg = document.getElementById('draw-svg');
   if (!svg || document.getElementById('modal-draw-overlay')?.hidden) return;
+  _drawEd_syncSegInputState();
   const W = svg.clientWidth, H = svg.clientHeight;
   svg.innerHTML = '';
   const FF = "Bahnschrift,'Trebuchet MS',sans-serif";
@@ -6583,6 +6738,35 @@ function _drawEd_render() {
     svg.appendChild(g);
   });
 
+  // ── Traits/Cercles de construction (décoratifs) ─────────────────────────
+  _drawEd.constructionLines.forEach((ln, idx) => {
+    const isSel = _drawEd.selectedEl?.type === 'cLine' && _drawEd.selectedEl.idx === idx;
+    const a = _drawEd_toSvg(ln.x1, ln.y1);
+    const b = _drawEd_toSvg(ln.x2, ln.y2);
+    const seg = _dNS('line');
+    seg.setAttribute('x1', a.x); seg.setAttribute('y1', a.y);
+    seg.setAttribute('x2', b.x); seg.setAttribute('y2', b.y);
+    seg.setAttribute('stroke', isSel ? '#e05818' : '#7f4ea7');
+    seg.setAttribute('stroke-width', isSel ? 2.4 : 1.6);
+    seg.setAttribute('stroke-dasharray', '7 5');
+    seg.setAttribute('cursor', 'pointer');
+    seg.setAttribute('data-cstr-line-idx', idx);
+    svg.appendChild(seg);
+  });
+  _drawEd.constructionCircles.forEach((cc, idx) => {
+    const isSel = _drawEd.selectedEl?.type === 'cCircle' && _drawEd.selectedEl.idx === idx;
+    const c = _drawEd_toSvg(cc.cx, cc.cy);
+    const cir = _dNS('circle');
+    cir.setAttribute('cx', c.x); cir.setAttribute('cy', c.y); cir.setAttribute('r', cc.r * _drawEd.zoom);
+    cir.setAttribute('fill', 'none');
+    cir.setAttribute('stroke', isSel ? '#e05818' : '#7f4ea7');
+    cir.setAttribute('stroke-width', isSel ? 2.4 : 1.5);
+    cir.setAttribute('stroke-dasharray', '6 4');
+    cir.setAttribute('cursor', 'pointer');
+    cir.setAttribute('data-cstr-circ-idx', idx);
+    svg.appendChild(cir);
+  });
+
   // ── Prévisualisation curseur ──────────────────────────────────────────────
   if (_drawEd.tmpPt) {
     const sv = _drawEd_toSvg(_drawEd.tmpPt.x, _drawEd.tmpPt.y);
@@ -6613,6 +6797,22 @@ function _drawEd_render() {
       pc.setAttribute('fill', 'rgba(20,100,160,0.05)'); pc.setAttribute('stroke', '#1a5080');
       pc.setAttribute('stroke-width', 1.5); pc.setAttribute('stroke-dasharray', '8 4'); pc.setAttribute('pointer-events', 'none');
       svg.appendChild(pc);
+    } else if (_drawEd.tool === 'cstr-line' && _drawEd._cstrLineStart) {
+      const sv0 = _drawEd_toSvg(_drawEd._cstrLineStart.x, _drawEd._cstrLineStart.y);
+      const seg = _dNS('line');
+      seg.setAttribute('x1', sv0.x); seg.setAttribute('y1', sv0.y);
+      seg.setAttribute('x2', sv.x); seg.setAttribute('y2', sv.y);
+      seg.setAttribute('stroke', '#7f4ea7'); seg.setAttribute('stroke-width', 1.5);
+      seg.setAttribute('stroke-dasharray', '7 5'); seg.setAttribute('pointer-events', 'none');
+      svg.appendChild(seg);
+    } else if (_drawEd.tool === 'cstr-circle' && _drawEd._cstrCircleCenter) {
+      const sc = _drawEd_toSvg(_drawEd._cstrCircleCenter.x, _drawEd._cstrCircleCenter.y);
+      const rPx = Math.hypot(sv.x - sc.x, sv.y - sc.y);
+      const pc = _dNS('circle');
+      pc.setAttribute('cx', sc.x); pc.setAttribute('cy', sc.y); pc.setAttribute('r', rPx);
+      pc.setAttribute('fill', 'none'); pc.setAttribute('stroke', '#7f4ea7');
+      pc.setAttribute('stroke-width', 1.4); pc.setAttribute('stroke-dasharray', '6 4'); pc.setAttribute('pointer-events', 'none');
+      svg.appendChild(pc);
     }
     // Marqueur snap
     const snapCol = _drawEd.tmpPt.snap === 'point' ? '#e05818' : '#1a7a70';
@@ -6626,15 +6826,28 @@ function _drawEd_render() {
     const sc = _drawEd_toSvg(_drawEd._circCenter.x, _drawEd._circCenter.y);
     svg.appendChild(_drawEd_dot(sc.x, sc.y, 5, '#d4732c', '#fff', 1.5));
   }
+  if (_drawEd.tool === 'cstr-line' && _drawEd._cstrLineStart) {
+    const s0 = _drawEd_toSvg(_drawEd._cstrLineStart.x, _drawEd._cstrLineStart.y);
+    svg.appendChild(_drawEd_dot(s0.x, s0.y, 5, '#7f4ea7', '#fff', 1.5));
+  }
+  if (_drawEd.tool === 'cstr-circle' && _drawEd._cstrCircleCenter) {
+    const sc = _drawEd_toSvg(_drawEd._cstrCircleCenter.x, _drawEd._cstrCircleCenter.y);
+    svg.appendChild(_drawEd_dot(sc.x, sc.y, 5, '#7f4ea7', '#fff', 1.5));
+  }
 
   _drawEd_updateStatus();
 }
 
 function _drawEd_updateStatus() {
   const bar = document.getElementById('draw-status-bar');
-  if (!bar) return;
+  const txtEl = document.getElementById('draw-status-text');
+  if (!bar && !txtEl) return;
   const p = _drawEd.tmpPt;
-  if (!p) { bar.textContent = '─'; return; }
+  if (!p) {
+    if (txtEl) txtEl.textContent = '─';
+    else if (bar) bar.textContent = '─';
+    return;
+  }
   let msg = `X: ${Math.round(p.x)} mm   Y: ${Math.round(p.y)} mm`;
   const aPts = _drawEd_activePts();
   if (_drawEd.tool === 'polyline' && aPts && aPts.length > 0) {
@@ -6648,17 +6861,19 @@ function _drawEd_updateStatus() {
   if (p.snap === 'point') msg += '   [ ⊕ ACCROCHE POINT ]';
   else if (p.snap === 'grid') msg += '   [ ⊞ GRILLE ]';
   if (_drawEd.ortho) msg += '   [ ORTHO ]';
-  bar.textContent = msg;
+  if (txtEl) txtEl.textContent = msg;
+  else if (bar) bar.textContent = msg;
 }
 
 function _drawEd_syncToolUI() {
-  ['select', 'polyline', 'circle'].forEach(t => {
+  _drawEd_syncSegInputState();
+  ['select', 'polyline', 'circle', 'cstr-line', 'cstr-circle'].forEach(t => {
     document.getElementById('draw-tool-' + t)?.classList.toggle('draw-tool-active', _drawEd.tool === t);
   });
   document.getElementById('draw-tool-ortho')?.classList.toggle('draw-tool-active', _drawEd.ortho);
   const indicator = document.getElementById('draw-mode-indicator');
   if (indicator) {
-    const names = { select: 'Sélection', polyline: 'Polyligne', circle: 'Cercle' };
+    const names = { select: 'Sélection', polyline: 'Polyligne', circle: 'Cercle', 'cstr-line': 'Trait construction', 'cstr-circle': 'Cercle construction' };
     indicator.textContent = (names[_drawEd.tool] || _drawEd.tool) + (_drawEd.ortho ? ' · ORTHO' : '');
   }
 }
@@ -6670,6 +6885,7 @@ function _drawEd_handleClick(e) {
   if (_drawEd.tool === 'polyline') {
     const aPts = _drawEd_activePts();
     if (_drawEd.ortho && aPts && aPts.length > 0) pt = _drawEd_applyOrtho(pt, aPts[aPts.length - 1]);
+    pt = _drawEd_applySegmentConstraints(pt);
     // Snap-close: click on first point
     if (aPts && aPts.length >= 3) {
       const first = aPts[0];
@@ -6693,6 +6909,30 @@ function _drawEd_handleClick(e) {
       const r = Math.hypot(pt.x - _drawEd._circCenter.x, pt.y - _drawEd._circCenter.y);
       if (r > 1) _drawEd.circles.push({ cx: _drawEd._circCenter.x, cy: _drawEd._circCenter.y, r });
       _drawEd._circCenter = null;
+    }
+  } else if (_drawEd.tool === 'cstr-line') {
+    if (!_drawEd._cstrLineStart) {
+      _drawEd._cstrLineStart = { x: pt.x, y: pt.y };
+    } else {
+      let p2 = pt;
+      if (_drawEd.ortho) p2 = _drawEd_applyOrtho(p2, _drawEd._cstrLineStart);
+      if (Math.hypot(p2.x - _drawEd._cstrLineStart.x, p2.y - _drawEd._cstrLineStart.y) > 1) {
+        _drawEd.constructionLines.push({
+          x1: _drawEd._cstrLineStart.x,
+          y1: _drawEd._cstrLineStart.y,
+          x2: p2.x,
+          y2: p2.y,
+        });
+      }
+      _drawEd._cstrLineStart = null;
+    }
+  } else if (_drawEd.tool === 'cstr-circle') {
+    if (!_drawEd._cstrCircleCenter) {
+      _drawEd._cstrCircleCenter = { x: pt.x, y: pt.y };
+    } else {
+      const r = Math.hypot(pt.x - _drawEd._cstrCircleCenter.x, pt.y - _drawEd._cstrCircleCenter.y);
+      if (r > 1) _drawEd.constructionCircles.push({ cx: _drawEd._cstrCircleCenter.x, cy: _drawEd._cstrCircleCenter.y, r });
+      _drawEd._cstrCircleCenter = null;
     }
   } else if (_drawEd.tool === 'select') {
     // Selection via data attributes is handled in svg click event
@@ -6739,10 +6979,15 @@ function _drawEd_handleMove(e) {
     _drawEd_render(); return;
   }
   let pt = _drawEd_getSnap(sv.x, sv.y);
-  if (_drawEd.tool === 'polyline' && _drawEd.ortho) {
-    const aPts = _drawEd_activePts();
-    if (aPts && aPts.length > 0) pt = _drawEd_applyOrtho(pt, aPts[aPts.length - 1]);
+  if (_drawEd.ortho) {
+    if (_drawEd.tool === 'polyline') {
+      const aPts = _drawEd_activePts();
+      if (aPts && aPts.length > 0) pt = _drawEd_applyOrtho(pt, aPts[aPts.length - 1]);
+    } else if (_drawEd.tool === 'cstr-line' && _drawEd._cstrLineStart) {
+      pt = _drawEd_applyOrtho(pt, _drawEd._cstrLineStart);
+    }
   }
+  pt = _drawEd_applySegmentConstraints(pt);
   _drawEd.tmpPt = pt;
   _drawEd_render();
 }
@@ -6848,6 +7093,17 @@ function _drawEd_apply() {
   state.bloc.width = w; state.bloc.depth = d;
   state.bloc.contourPoints = pts.map(p => ({ x: Math.round(p.x - bb.minX), y: Math.round(p.y - bb.minY) }));
   state.bloc.contourClosed = true; state.bloc.contourSource = 'drawn';
+  state.bloc.constructionLines = _drawEd.constructionLines.map((l) => ({
+    x1: Math.round((l.x1 - bb.minX) * 10) / 10,
+    y1: Math.round((l.y1 - bb.minY) * 10) / 10,
+    x2: Math.round((l.x2 - bb.minX) * 10) / 10,
+    y2: Math.round((l.y2 - bb.minY) * 10) / 10,
+  }));
+  state.bloc.constructionCircles = _drawEd.constructionCircles.map((c) => ({
+    cx: Math.round((c.cx - bb.minX) * 10) / 10,
+    cy: Math.round((c.cy - bb.minY) * 10) / 10,
+    r: Math.max(0, Math.round(c.r * 10) / 10),
+  }));
   state.couches.forEach(syncSalleSurfaceFromBloc);
   state.plansSpeciaux.forEach(syncSalleSurfaceFromBloc);
   syncSalleSurfaceFromBloc(ac());
@@ -6863,6 +7119,19 @@ function _drawEd_apply() {
 function _setupDrawEditor() {
   const svg = document.getElementById('draw-svg');
   if (!svg) return;
+
+  ['draw-input-dx', 'draw-input-dy', 'draw-input-ang'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', () => { _drawEd_render(); });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        el.value = '';
+        _drawEd_render();
+        e.stopPropagation();
+      }
+    });
+  });
 
   svg.addEventListener('click', e => {
     // Ignorer le click qui suit un drag de sommet
@@ -6880,6 +7149,10 @@ function _setupDrawEditor() {
     }
     const ci = e.target.getAttribute('data-circ-idx');
     if (ci !== null && _drawEd.tool === 'select') { _drawEd.selectedEl = { type: 'circle', idx: +ci }; _drawEd_render(); return; }
+    const cli = e.target.getAttribute('data-cstr-line-idx');
+    if (cli !== null && _drawEd.tool === 'select') { _drawEd.selectedEl = { type: 'cLine', idx: +cli }; _drawEd_render(); return; }
+    const cci = e.target.getAttribute('data-cstr-circ-idx');
+    if (cci !== null && _drawEd.tool === 'select') { _drawEd.selectedEl = { type: 'cCircle', idx: +cci }; _drawEd_render(); return; }
     _drawEd_handleClick(e);
   });
   svg.addEventListener('dblclick', _drawEd_handleDblClick);
@@ -6940,6 +7213,7 @@ function _setupDrawEditor() {
 
   document.addEventListener('keydown', e => {
     if (document.getElementById('modal-draw-overlay')?.hidden) return;
+    if (_drawEd_isTypingInSegInput() && e.key !== 'Escape') return;
     if (e.key === 'Escape') {
       const aPts = _drawEd_activePts();
       if (aPts && aPts.length > 1) { aPts.pop(); _drawEd_render(); }
@@ -6947,21 +7221,31 @@ function _setupDrawEditor() {
       else _drawEd_close();
     }
     if (e.key === 'o' || e.key === 'O') { _drawEd.ortho = !_drawEd.ortho; _drawEd_syncToolUI(); _drawEd_render(); }
-    if (e.key === 'l' || e.key === 'L') { _drawEd.tool = 'polyline'; _drawEd._circCenter = null; _drawEd_syncToolUI(); }
-    if (e.key === 'c' || e.key === 'C') { _drawEd.tool = 'circle'; _drawEd._circCenter = null; _drawEd_syncToolUI(); }
-    if (e.key === 's' || e.key === 'S') { _drawEd.tool = 'select'; _drawEd._circCenter = null; _drawEd_syncToolUI(); }
+    if (e.key === 'l' || e.key === 'L') { _drawEd.tool = 'polyline'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); }
+    if (e.key === 'c' || e.key === 'C') { _drawEd.tool = 'circle'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); }
+    if (e.key === 'i' || e.key === 'I') { _drawEd.tool = 'cstr-line'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); }
+    if (e.key === 'u' || e.key === 'U') { _drawEd.tool = 'cstr-circle'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); }
+    if (e.key === 's' || e.key === 'S') { _drawEd.tool = 'select'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); }
     if ((e.key === 'Delete' || e.key === 'Backspace') && _drawEd.selectedEl) {
       if (_drawEd.selectedEl.type === 'poly') {
         _drawEd.polylines.splice(_drawEd.selectedEl.idx, 1);
         if (_drawEd.activePolyIdx === _drawEd.selectedEl.idx) _drawEd.activePolyIdx = -1;
-      } else { _drawEd.circles.splice(_drawEd.selectedEl.idx, 1); }
+      } else if (_drawEd.selectedEl.type === 'circle') {
+        _drawEd.circles.splice(_drawEd.selectedEl.idx, 1);
+      } else if (_drawEd.selectedEl.type === 'cLine') {
+        _drawEd.constructionLines.splice(_drawEd.selectedEl.idx, 1);
+      } else if (_drawEd.selectedEl.type === 'cCircle') {
+        _drawEd.constructionCircles.splice(_drawEd.selectedEl.idx, 1);
+      }
       _drawEd.selectedEl = null; _drawEd_render();
     }
   });
 
-  document.getElementById('draw-tool-select')?.addEventListener('click', () => { _drawEd.tool = 'select'; _drawEd._circCenter = null; _drawEd_syncToolUI(); });
-  document.getElementById('draw-tool-polyline')?.addEventListener('click', () => { _drawEd.tool = 'polyline'; _drawEd._circCenter = null; _drawEd_syncToolUI(); });
-  document.getElementById('draw-tool-circle')?.addEventListener('click', () => { _drawEd.tool = 'circle'; _drawEd._circCenter = null; _drawEd_syncToolUI(); });
+  document.getElementById('draw-tool-select')?.addEventListener('click', () => { _drawEd.tool = 'select'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); });
+  document.getElementById('draw-tool-polyline')?.addEventListener('click', () => { _drawEd.tool = 'polyline'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); });
+  document.getElementById('draw-tool-circle')?.addEventListener('click', () => { _drawEd.tool = 'circle'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); });
+  document.getElementById('draw-tool-cstr-line')?.addEventListener('click', () => { _drawEd.tool = 'cstr-line'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); });
+  document.getElementById('draw-tool-cstr-circle')?.addEventListener('click', () => { _drawEd.tool = 'cstr-circle'; _drawEd._circCenter = null; _drawEd._cstrLineStart = null; _drawEd._cstrCircleCenter = null; _drawEd_syncToolUI(); });
   document.getElementById('draw-tool-ortho')?.addEventListener('click', () => { _drawEd.ortho = !_drawEd.ortho; _drawEd_syncToolUI(); _drawEd_render(); });
   document.getElementById('draw-grid-step')?.addEventListener('input', e => {
     const v = parseInt(e.target.value, 10);
@@ -6981,7 +7265,15 @@ function _setupDrawEditor() {
     else if (aPts && aPts.length === 1) { _drawEd.polylines.splice(_drawEd.activePolyIdx, 1); _drawEd.activePolyIdx = -1; _drawEd_render(); }
   });
   document.getElementById('draw-clear-btn')?.addEventListener('click', () => {
-    _drawEd.polylines = []; _drawEd.circles = []; _drawEd.activePolyIdx = -1; _drawEd._circCenter = null; _drawEd_render();
+    _drawEd.polylines = [];
+    _drawEd.circles = [];
+    _drawEd.constructionLines = [];
+    _drawEd.constructionCircles = [];
+    _drawEd.activePolyIdx = -1;
+    _drawEd._circCenter = null;
+    _drawEd._cstrLineStart = null;
+    _drawEd._cstrCircleCenter = null;
+    _drawEd_render();
   });
   document.getElementById('draw-apply-btn')?.addEventListener('click', _drawEd_apply);
   document.getElementById('draw-close-btn')?.addEventListener('click', _drawEd_close);
