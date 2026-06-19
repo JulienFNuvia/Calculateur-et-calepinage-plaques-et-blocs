@@ -8127,6 +8127,9 @@ const syntheseState = {
   pdfLegalFooterText: DEFAULT_PDF_LEGAL_FOOTER,
 };
 
+const ASSET_VERSION = '20260619-2';
+const _vurl = (p) => `${p}${p.includes('?') ? '&' : '?'}v=${ASSET_VERSION}`;
+
 function synthLoadFromLS() {
   try {
     const s = localStorage.getItem(SYNTH_LS_KEY);
@@ -11198,7 +11201,7 @@ async function initRendements() {
   // 1. Charger le manifest (liste de fichiers template)
   let templateFiles = [];
   try {
-    const resp = await fetch('./rendements_template.json');
+    const resp = await fetch(_vurl('./rendements_template.json'), { cache: 'no-store' });
     if (resp.ok) templateFiles = await resp.json();
   } catch (_) {}
 
@@ -11206,7 +11209,7 @@ async function initRendements() {
   const templateTables = [];
   for (const fname of (Array.isArray(templateFiles) ? templateFiles : [])) {
     try {
-      const resp = await fetch('./' + fname);
+      const resp = await fetch(_vurl('./' + fname), { cache: 'no-store' });
       if (resp.ok) {
         const tbl = await resp.json();
         if (tbl?.id) templateTables.push(tbl);
