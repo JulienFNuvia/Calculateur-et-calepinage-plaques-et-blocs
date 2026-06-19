@@ -30,7 +30,7 @@
           <button class="main-nav-btn" data-main-tab="metre" role="tab" aria-selected="false">Métré</button>
           <button class="main-nav-btn" data-main-tab="rendement" role="tab" aria-selected="false">Tableaux de rendement</button>
           <button class="main-nav-btn" data-main-tab="params" role="tab" aria-selected="false">Paramètres</button>
-          <button class="main-nav-btn" data-main-tab="export" role="tab" aria-selected="false">Exporter 2D/3D</button>
+          <button class="main-nav-btn" data-main-tab="export" role="tab" aria-selected="false">Export 2D</button>
           <button class="main-nav-btn" data-main-tab="devlog" role="tab" aria-selected="false">Devlogs</button>
           </nav>
         </div>
@@ -113,9 +113,9 @@
               Hauteur surface (mm)
               <input type="number" id="surface-height" min="100" step="10" value="1500" required />
             </label>
-            <label id="surface-diametre-wrap" hidden>
-              Diamètre (mm)
-              <input type="number" id="surface-diametre" min="100" step="10" value="1500" />
+            <label id="surface-peripheral-offset-wrap">
+              Décalage périphériques (mm)
+              <input type="number" id="surface-peripheral-offset" min="0" step="10" value="0" placeholder="ex : 200" />
             </label>
             <label>
               Niveau (mm)
@@ -308,8 +308,8 @@
               Type
               <select id="zone-type">
                 <option value="exclusion">Zone d'exclusion</option>
-                <option value="souszone">Sous-zone (calepinage propre)</option>
-                <option value="decoupe">Découpe à la disqueuse</option>
+                <option value="souszone" hidden>Sous-zone (calepinage propre)</option>
+                <option value="decoupe" hidden>Découpe à la disqueuse</option>
               </select>
             </label>
             <label>
@@ -436,9 +436,9 @@
               </div>
             </div>
             <p style="margin:0;color:#2d4a5e;font-size:0.92rem;line-height:1.7">
-              Logiciel web de <strong>planification et d'optimisation du carottage de trémies</strong> dans des voiles et dalles en béton armé.
-              Il permet de définir les surfaces à caroter, de générer automatiquement le calepinage des carottages selon les contraintes de ferraillage,
-              d'estimer les rendements de chantier et d'exporter directement les données vers SolidWorks pour la modélisation 3D.
+              Logiciel web de <strong>calepinage et de métré des plaques et carottages</strong> pour voiles et dalles en béton armé.
+              Il permet de définir la géométrie, générer/ajuster le calepinage, contrôler la cohérence 2D/3D,
+              produire les tableaux de métré, puis exporter les données chantier (PDF, Excel, AutoCAD 2D).
             </p>
           </div>
 
@@ -446,15 +446,13 @@
           <div class="panel" style="padding:20px 24px">
             <h2 style="font-size:0.88rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#6b8099;margin:0 0 14px">Modules</h2>
             <ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px">
-              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F5FA;&#xFE0F;</span><span><strong>Éditeur 2D</strong> — Calepinage des carottages en vue de dessus, gestion des zones d'exclusion et sous-zones</span></li>
-              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4E6;</span><span><strong>Éditeur 3D</strong> — Visualisation volumique des couches et carottages dans la dalle béton</span></li>
-              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x267B;&#xFE0F;</span><span><strong>Production de déchets</strong> — Estimation des masses de carottes et graphiques journalier / cumulatif par couche</span></li>
-              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4CA;</span><span><strong>Synthèse projet</strong> — Vue consolidée des temps, rendements, quantités, planning, coûts et déchets par couche</span></li>
-              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4C5;</span><span><strong>Planning</strong> — Diagramme de Gantt avec jours fériés français et antécédents paramétrables</span></li>
-              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4B6;</span><span><strong>Coûts</strong> — Estimation des coûts MO, coût de revient et prix de vente (TU / TA)</span></li>
-              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4C8;</span><span><strong>Tableaux de rendement</strong> — Paramétrage des rendements de carottage par diamètre et contexte (hors Z4 / Z4, maillage)</span></li>
-              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4E4;</span><span><strong>Export SolidWorks</strong> — Génération de macro VBA <code>.swb</code> pour modélisation 3D automatique</span></li>
-              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4D0;</span><span><strong>Export AutoCAD</strong> — Génération de script <code>.scr</code> pour tracé 2D automatique</span></li>
+              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F5FA;&#xFE0F;</span><span><strong>Éditeur 2D</strong> — Géométrie voile/dalle, calepinage des plaques, contraintes de plaques, mesure et repérage</span></li>
+              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4E6;</span><span><strong>Éditeur 3D</strong> — Visualisation volumique, contrôles de vue et validation visuelle des découpes/carottages</span></li>
+              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4CB;</span><span><strong>Métré</strong> — Tableaux plaques/carottages/sciage avec schémas, export Excel et PDF complet</span></li>
+              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4C8;</span><span><strong>Tableaux de rendement</strong> — Paramétrage des rendements par diamètre, maillage et contexte chantier</span></li>
+              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x2699;&#xFE0F;</span><span><strong>Paramètres</strong> — Réglages de calcul, temps opératoires et texte légal des exports PDF</span></li>
+              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4D0;</span><span><strong>Export 2D</strong> — Génération de script AutoCAD <code>.scr</code> (contours, traits de découpe, carottages)</span></li>
+              <li style="display:flex;gap:10px;align-items:flex-start"><span style="font-size:1.1rem;min-width:22px">&#x1F4D3;</span><span><strong>Devlogs</strong> — Suivi des évolutions et historique des ajustements fonctionnels</span></li>
             </ul>
           </div>
 
@@ -464,6 +462,16 @@
             <!-- Projet -->
             <div class="panel" style="padding:20px 24px">
               <h2 style="font-size:0.88rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#6b8099;margin:0 0 14px">Projet</h2>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
+                <label style="font-size:0.84rem;color:#405060">
+                  Projet
+                  <input type="text" id="project-name-input" placeholder="XXXX" style="width:100%" />
+                </label>
+                <label style="font-size:0.84rem;color:#405060">
+                  Voile/Dalle
+                  <input type="text" id="ouvrage-name-input" placeholder="XXXX" style="width:100%" />
+                </label>
+              </div>
               <div style="display:flex;flex-direction:column;gap:10px">
                 <button id="btn-save" class="btn btn-primary" style="width:100%;font-size:0.95rem;padding:9px">&#128190; Sauvegarder le projet</button>
                 <label id="btn-load-label" class="btn" style="cursor:pointer;display:block;width:100%;font-size:0.95rem;padding:9px;text-align:center;box-sizing:border-box">&#128194; Charger un projet
@@ -515,14 +523,15 @@
               <h3 class="legend-title">Affichage</h3>
               <ul class="legend-list">
                 <li><label class="legend-item"><input type="checkbox" id="filter2d-interdites" checked /><span class="legend-swatch" style="background:#a6283f"></span>Zones interdites</label></li>
-                <li><label class="legend-item"><input type="checkbox" id="filter2d-souszones" checked /><span class="legend-swatch" style="background:#0f6d63"></span>Sous-zones</label></li>
-                <li><label class="legend-item"><input type="checkbox" id="filter2d-decoupes" checked /><span class="legend-swatch" style="background:#3a4090"></span>Découpes disqueuse</label></li>
+                <li hidden><label class="legend-item"><input type="checkbox" id="filter2d-souszones" checked /><span class="legend-swatch" style="background:#0f6d63"></span>Sous-zones</label></li>
+                <li hidden><label class="legend-item"><input type="checkbox" id="filter2d-decoupes" checked /><span class="legend-swatch" style="background:#3a4090"></span>Découpes disqueuse</label></li>
                 <li><label class="legend-item"><input type="checkbox" id="filter2d-labels" checked /><span class="legend-swatch legend-swatch-text">A</span>Étiquettes</label></li>
               </ul>
-              <h3 class="legend-title" style="margin-top:16px">Carottages</h3>
+              <h3 class="legend-title" style="margin-top:16px">Légendes</h3>
               <ul class="legend-list">
-                <li><span class="legend-item"><span class="legend-swatch" style="background:rgba(31,77,115,0.4);border:2px solid #1f4d73"></span>Surface de base</span></li>
-                <li><span class="legend-item"><span class="legend-swatch" style="background:rgba(20,100,60,0.3);border:2px solid #1a7040"></span>Sous-zone</span></li>
+                <li><span class="legend-item"><span class="legend-swatch" style="background:rgba(31,77,115,0.4);border:2px solid #1f4d73"></span>Carottages</span></li>
+                <li><span class="legend-item"><span class="legend-swatch" style="background:rgba(20,100,60,0.3);border:2px solid #1a7040"></span>Plaque</span></li>
+                <li><span class="legend-item"><span class="legend-swatch" style="background:rgba(224,120,26,0.25);border:2px solid #e0781a"></span>Plaque contrainte</span></li>
               </ul>
               <h3 class="legend-title" style="margin-top:16px">Calques</h3>
               <p class="legend-hint">Glisser pour réordonner. En haut = priorité d'affichage et de sélection.</p>
@@ -532,17 +541,17 @@
                   <span class="legend-swatch" style="background:#a6283f"></span>
                   <span>Zones interdites</span>
                 </li>
-                <li class="layer-order-item" data-layer="souszones" draggable="true">
+                <li class="layer-order-item" data-layer="souszones" draggable="true" hidden>
                   <span class="layer-drag-handle" aria-hidden="true">⠇</span>
                   <span class="legend-swatch" style="background:#0f6d63"></span>
                   <span>Sous-zones</span>
                 </li>
-                <li class="layer-order-item" data-layer="decoupes" draggable="true">
+                <li class="layer-order-item" data-layer="decoupes" draggable="true" hidden>
                   <span class="layer-drag-handle" aria-hidden="true">⠇</span>
                   <span class="legend-swatch" style="background:rgba(58,64,144,0.35);border:2px solid #3a4090"></span>
                   <span>Découpes disqueuse</span>
                 </li>
-                <li class="layer-order-item" data-layer="manuels" draggable="true">
+                <li class="layer-order-item" data-layer="manuels" draggable="true" hidden>
                   <span class="layer-drag-handle" aria-hidden="true">⠇</span>
                   <span class="legend-swatch" style="background:rgba(230,120,20,0.35);border:2px solid #e07010"></span>
                   <span>Carottages manuels</span>
@@ -579,8 +588,8 @@
               <h3 class="legend-title">Affichage</h3>
               <ul class="legend-list">
                 <li><label class="legend-item"><input type="checkbox" id="filter-interdites" checked /><span class="legend-swatch" style="background:#a6283f"></span>Zones interdites</label></li>
-                <li><label class="legend-item"><input type="checkbox" id="filter-souszones" checked /><span class="legend-swatch" style="background:#0f6d63"></span>Sous-zones</label></li>
-                <li><label class="legend-item"><input type="checkbox" id="filter-decoupes" checked /><span class="legend-swatch" style="background:#3a4070"></span>Zones de découpe</label></li>
+                <li hidden><label class="legend-item"><input type="checkbox" id="filter-souszones" checked /><span class="legend-swatch" style="background:#0f6d63"></span>Sous-zones</label></li>
+                <li hidden><label class="legend-item"><input type="checkbox" id="filter-decoupes" checked /><span class="legend-swatch" style="background:#3a4070"></span>Zones de découpe</label></li>
                 <li><label class="legend-item"><input type="checkbox" id="filter-labels" checked /><span class="legend-swatch legend-swatch-text">A</span>Étiquettes</label></li>
               </ul>
               <h3 class="legend-title" style="margin-top:16px">Coupes</h3>
@@ -626,7 +635,7 @@
       </div>
 
       <div id="main-tab-export" class="main-tab-panel" hidden>
-        <div class="panel" style="max-width:520px;margin:40px auto">
+        <div class="panel" style="max-width:520px;margin:40px auto" hidden>
           <h2 style="font-size:1.1rem;color:#1f3447;margin:0 0 6px">Exporter SolidWorks (.swb)</h2>
           <p style="color:#6b8099;font-size:0.85rem;margin:0 0 14px">Génère une macro VBA <strong>.swb</strong> exécutable dans SolidWorks pour créer automatiquement les carottages en 3D.</p>
           <!-- Tuto SolidWorks -->

@@ -136,6 +136,7 @@ function makePlanSpecial(label) {
     surface: {
       width: 1500, height: 1500, gridStep: 500, showGrid: true,
       profondeur: 200, profondeurActivee: 200, niveau: null, hasBottom: false,
+      peripheralOffsetMm: 0,
       positionPreset: 'custom',
       offsetX: 0, offsetY: 0, offsetZ: 0,
       inclinaisonX: 0,   // deg — tilt autour de l'axe X (largeur)
@@ -179,6 +180,7 @@ function makeCouche(label) {
       diametre: 1500,           // mm — utilisé quand nature === 'circulaire'
       width: 1500,
       height: 1500,
+      peripheralOffsetMm: 0,
       gridStep: 500,
       showGrid: true,
       hasBottom: false,
@@ -229,6 +231,10 @@ function makeCouche(label) {
 const state = {
   couches: [makeCouche("Couche 1")],
   activeCoucheIndex: 0,
+  projectMeta: {
+    projectName: "",
+    ouvrageName: "",
+  },
   plansSpeciaux: [],
   activePsIndex: 0,
   editMode: 'couche',   // 'couche' | 'planSpecial'
@@ -315,6 +321,7 @@ const ui = {
   height: document.getElementById("surface-height"),
   surfaceNature:   document.getElementById("surface-nature"),
   surfaceDiametre: document.getElementById("surface-diametre"),
+  surfacePeripheralOffset: document.getElementById("surface-peripheral-offset"),
   gridStep: document.getElementById("grid-step"),
   surfaceHasBottom: document.getElementById("surface-has-bottom"),
   surfaceMaillage: document.getElementById("surface-maillage"),
@@ -332,6 +339,8 @@ const ui = {
   caption: document.getElementById("surface-caption"),
   saveBtn:     document.getElementById("btn-save"),
   loadInput:   document.getElementById("load-input"),
+  projectNameInput: document.getElementById("project-name-input"),
+  ouvrageNameInput: document.getElementById("ouvrage-name-input"),
   exportSwBtn: document.getElementById("btn-export-sw"),
   exportAcadBtn: document.getElementById("btn-export-acad"),
   smartAdaptiveDiam:  document.getElementById("smart-adaptive-diam"),
@@ -381,6 +390,19 @@ const ui = {
 };
 
 let _algoUiSurfaceRef = null;
+
+function _syncProjectMetaUi() {
+  if (ui.projectNameInput) ui.projectNameInput.value = String(state.projectMeta?.projectName || "");
+  if (ui.ouvrageNameInput) ui.ouvrageNameInput.value = String(state.projectMeta?.ouvrageName || "");
+}
+
+ui.projectNameInput?.addEventListener("input", () => {
+  state.projectMeta.projectName = String(ui.projectNameInput.value || "").trim();
+});
+
+ui.ouvrageNameInput?.addEventListener("input", () => {
+  state.projectMeta.ouvrageName = String(ui.ouvrageNameInput.value || "").trim();
+});
 
 function _syncAlgoUiReadouts() {
   const s = ac()?.surface;
@@ -565,45 +587,22 @@ function renderPlan() {
   ui.svg.appendChild(gridGroup);
 
   const topLeft = mmToView(0, 0, transform);
-  let _circClipParams = null;
-  const _salleClipId = 'surf-salle-clip';
-  if (_isCirc) {
-    const _cx = topLeft.x + (width / 2) * transform.scale;
-    const _cy = topLeft.y + (height / 2) * transform.scale;
-    const _rC = (width / 2) * transform.scale;
-    _circClipParams = { cx: _cx, cy: _cy, rCirc: _rC };
-    const _clipPath = createSvg('clipPath', { id: 'surf-circ-clip' });
-    _clipPath.appendChild(createSvg('circle', { cx: _cx, cy: _cy, r: _rC }));
-    defs.appendChild(_clipPath);
-    gridGroup.setAttribute('clip-path', 'url(#surf-circ-clip)');
-    ui.svg.appendChild(createSvg('circle', { cx: _cx, cy: _cy, r: _rC, fill: '#fbfdff', stroke: 'none' }));
-  } else if (_isSalle && state.bloc.contourSource === 'drawn' && Array.isArray(state.bloc.contourPoints) && state.bloc.contourPoints.length >= 3) {
-    const d = state.bloc.contourPoints.map((p, i) => {
-      const v = mmToView(p.x, p.y, transform);
-      return `${i === 0 ? 'M' : 'L'} ${v.x} ${v.y}`;
-    }).join(' ');
-    const clipPath = createSvg('clipPath', { id: _salleClipId });
-    clipPath.appendChild(createSvg('path', { d: `${d} Z` }));
-    defs.appendChild(clipPath);
-    gridGroup.setAttribute('clip-path', `url(#${_salleClipId})`);
-    ui.svg.appendChild(createSvg('path', {
-      d: `${d} Z`,
-      fill: '#fbfdff',
-      stroke: '#1e455f',
-      'stroke-width': 2,
-    }));
-  } else {
-    const rect = createSvg("rect", {
-      x: topLeft.x,
-      y: topLeft.y,
-      width: width * transform.scale,
-      height: height * transform.scale,
-      fill: "#fbfdff",
-      stroke: "#1e455f",
-      "stroke-width": 2,
-    });
-    ui.svg.appendChild(rect);
-  }
+  const slabPoly = _getSlabPoly(_s);
+  const _surfClipId = 'surf-shape-clip';
+  const slabPath = slabPoly.map((p, i) => {
+    const v = mmToView(p.x, p.y, transform);
+    return `${i === 0 ? 'M' : 'L'} ${v.x} ${v.y}`;
+  }).join(' ');
+  const clipPath = createSvg('clipPath', { id: _surfClipId });
+  clipPath.appendChild(createSvg('path', { d: `${slabPath} Z` }));
+  defs.appendChild(clipPath);
+  gridGroup.setAttribute('clip-path', `url(#${_surfClipId})`);
+  ui.svg.appendChild(createSvg('path', {
+    d: `${slabPath} Z`,
+    fill: '#fbfdff',
+    stroke: '#1e455f',
+    'stroke-width': 2,
+  }));
 
   // ── Dessin des calques dans l'ordre de priorité ──────────────────────────
   // layerOrder2d[0] = priorité max = dessiné en DERNIER (z-order le plus haut).
@@ -1179,25 +1178,14 @@ function renderPlan() {
   // ── Outil mesure
   if (measureState.active) _drawMeasureLayer(transform);
 
-  // ── Clip circulaire — conteneur final (masque l'extérieur du disque) ────────
-  if (_circClipParams) {
-    const { cx, cy, rCirc } = _circClipParams;
-    const grp = createSvg('g', { 'clip-path': 'url(#surf-circ-clip)' });
+  // ── Clip final sur la géométrie réelle de la couche (avec décalage) ─────────
+  {
+    const grp = createSvg('g', { 'clip-path': `url(#${_surfClipId})` });
     const toMove = [...ui.svg.childNodes].filter(n => n.tagName !== 'defs');
     for (const n of toMove) grp.appendChild(n);
     ui.svg.appendChild(grp);
-    ui.svg.appendChild(createSvg('circle', { cx, cy, r: rCirc, fill: 'none', stroke: '#1e455f', 'stroke-width': 2 }));
-  } else if (_isSalle && state.bloc.contourSource === 'drawn' && Array.isArray(state.bloc.contourPoints) && state.bloc.contourPoints.length >= 3) {
-    const grp = createSvg('g', { 'clip-path': `url(#${_salleClipId})` });
-    const toMove = [...ui.svg.childNodes].filter(n => n.tagName !== 'defs');
-    for (const n of toMove) grp.appendChild(n);
-    ui.svg.appendChild(grp);
-    const d = state.bloc.contourPoints.map((p, i) => {
-      const v = mmToView(p.x, p.y, transform);
-      return `${i === 0 ? 'M' : 'L'} ${v.x} ${v.y}`;
-    }).join(' ');
     ui.svg.appendChild(createSvg('path', {
-      d: `${d} Z`,
+      d: `${slabPath} Z`,
       fill: 'none',
       stroke: '#1e455f',
       'stroke-width': 2,
@@ -1226,23 +1214,122 @@ function _updateSwEstimate() {
 
 // ── Outil mesure 2D ────────────────────────────────────────────
 
-// Intersections géométriques entre deux cercles (arrondi 0.1 mm)
-function _circleIntersections(h1, h2) {
-  const rx = h2.x - h1.x, ry = h2.y - h1.y;
-  const d = Math.sqrt(rx * rx + ry * ry);
-  const r1 = h1.diameter / 2, r2 = h2.diameter / 2;
-  if (d > r1 + r2 + 1e-6 || d < Math.abs(r1 - r2) - 1e-6 || d < 1e-6) return [];
-  const a = (r1 * r1 - r2 * r2 + d * d) / (2 * d);
-  const h2val = r1 * r1 - a * a;
-  if (h2val < 0) return [];
-  const hh = Math.sqrt(h2val);
-  const mx = h1.x + a * rx / d, my = h1.y + a * ry / d;
-  const rd = v => Math.round(v * 10) / 10;
-  if (hh < 1e-6) return [{ x: rd(mx), y: rd(my) }];
+function _measureR1(v) {
+  return Math.round(Number(v || 0) * 10) / 10;
+}
+
+function _measurePlaquePoly(pl) {
+  if (!pl || pl.isConstrained) return null;
+  if (Array.isArray(pl.poly) && pl.poly.length >= 3) {
+    return pl.poly.map(pt => ({ x: Number(pt.x) || 0, y: Number(pt.y) || 0 }));
+  }
+  const x = Number(pl.x) || 0;
+  const y = Number(pl.y) || 0;
+  const w = Number(pl.w) || 0;
+  const h = Number(pl.h) || 0;
+  if (w <= 0 || h <= 0) return null;
   return [
-    { x: rd(mx + hh * ry / d), y: rd(my - hh * rx / d) },
-    { x: rd(mx - hh * ry / d), y: rd(my + hh * rx / d) },
+    { x, y },
+    { x: x + w, y },
+    { x: x + w, y: y + h },
+    { x, y: y + h },
   ];
+}
+
+function _measurePolyCenter(poly) {
+  let area2 = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i];
+    const q = poly[(i + 1) % poly.length];
+    const cross = p.x * q.y - q.x * p.y;
+    area2 += cross;
+    cx += (p.x + q.x) * cross;
+    cy += (p.y + q.y) * cross;
+  }
+  if (Math.abs(area2) > 1e-6) {
+    return { x: _measureR1(cx / (3 * area2)), y: _measureR1(cy / (3 * area2)) };
+  }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of poly) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  return { x: _measureR1((minX + maxX) / 2), y: _measureR1((minY + maxY) / 2) };
+}
+
+function _measureSegIntersections(a, b, c, d) {
+  const eps = 1e-6;
+  const out = [];
+  const cross = (u, v) => u.x * v.y - u.y * v.x;
+  const sub = (u, v) => ({ x: u.x - v.x, y: u.y - v.y });
+  const r = sub(b, a);
+  const s = sub(d, c);
+  const rxs = cross(r, s);
+  const qmp = sub(c, a);
+  const qmpxr = cross(qmp, r);
+  const inBox = (p, p1, p2) => (
+    p.x >= Math.min(p1.x, p2.x) - eps && p.x <= Math.max(p1.x, p2.x) + eps &&
+    p.y >= Math.min(p1.y, p2.y) - eps && p.y <= Math.max(p1.y, p2.y) + eps
+  );
+
+  if (Math.abs(rxs) < eps && Math.abs(qmpxr) < eps) {
+    const candidates = [a, b, c, d];
+    for (const p of candidates) {
+      if (inBox(p, a, b) && inBox(p, c, d)) out.push({ x: _measureR1(p.x), y: _measureR1(p.y) });
+    }
+    return out;
+  }
+
+  if (Math.abs(rxs) < eps) return out;
+
+  const t = cross(qmp, s) / rxs;
+  const u = cross(qmp, r) / rxs;
+  if (t >= -eps && t <= 1 + eps && u >= -eps && u <= 1 + eps) {
+    out.push({ x: _measureR1(a.x + t * r.x), y: _measureR1(a.y + t * r.y) });
+  }
+  return out;
+}
+
+function _measureSnapPoints() {
+  const snaps = [];
+  const seen = new Set();
+  const push = (x, y, kind) => {
+    const px = _measureR1(x);
+    const py = _measureR1(y);
+    const key = px + ',' + py;
+    if (seen.has(key)) return;
+    seen.add(key);
+    snaps.push({ x: px, y: py, kind });
+  };
+
+  const polys = [];
+  for (const pl of (ac().plaques || [])) {
+    const poly = _measurePlaquePoly(pl);
+    if (!poly) continue;
+    polys.push(poly);
+    const center = _measurePolyCenter(poly);
+    push(center.x, center.y, 'center');
+  }
+
+  for (let i = 0; i < polys.length - 1; i++) {
+    const p1 = polys[i];
+    for (let j = i + 1; j < polys.length; j++) {
+      const p2 = polys[j];
+      for (let a = 0; a < p1.length; a++) {
+        const b = (a + 1) % p1.length;
+        for (let c = 0; c < p2.length; c++) {
+          const d = (c + 1) % p2.length;
+          for (const p of _measureSegIntersections(p1[a], p1[b], p2[c], p2[d])) {
+            push(p.x, p.y, 'intersection');
+          }
+        }
+      }
+    }
+  }
+
+  return snaps;
 }
 
 function _measurePtMatch(p, x, y) {
@@ -1250,10 +1337,6 @@ function _measurePtMatch(p, x, y) {
 }
 
 function _drawMeasureLayer(transform) {
-  const s = ac().surface;
-  const step = (s.showGrid && s.gridStep > 0) ? s.gridStep : 500;
-  const W = s.width || s.diametre || 1500;
-  const H = s.height || s.diametre || 1500;
   const FF = "Bahnschrift,Trebuchet MS,sans-serif";
   const g = createSvg('g', { id: 'measure-layer' });
 
@@ -1271,25 +1354,9 @@ function _drawMeasureLayer(transform) {
     g.appendChild(dot);
   };
 
-  // Points de grille (bleus)
-  for (let mx = 0; mx <= W; mx += step) {
-    for (let my = 0; my <= H; my += step) {
-      addDot(mx, my, false);
-    }
-  }
-
-  // Intersections cercle-cercle (oranges)
-  const holes = ac().holes;
-  const seen = new Set();
-  for (let i = 0; i < holes.length - 1; i++) {
-    for (let j = i + 1; j < holes.length; j++) {
-      for (const p of _circleIntersections(holes[i], holes[j])) {
-        const key = p.x + ',' + p.y;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        addDot(p.x, p.y, true);
-      }
-    }
+  // Accroches mesure : centres des plaques réelles + intersections de plaques.
+  for (const p of _measureSnapPoints()) {
+    addDot(p.x, p.y, p.kind === 'intersection');
   }
 
   // Ligne + annotation entre les 2 points sélectionnés
@@ -1453,17 +1520,29 @@ function renderTable() {
 
 function isHoleInsideSurface(hole) {
   const r = hole.diameter / 2;
-  if (ac().surface.nature === 'circulaire') {
-    const R = (ac().surface.diametre || ac().surface.width) / 2;
-    const dx = hole.x - R, dy = hole.y - R;
-    return Math.sqrt(dx * dx + dy * dy) + r <= R + 1e-6;
+  const slabPoly = _getSlabPoly(ac().surface);
+  if (!Array.isArray(slabPoly) || slabPoly.length < 3) return false;
+  if (!_pointInPoly(hole.x, hole.y, slabPoly)) return false;
+
+  const pointSegDist = (px, py, ax, ay, bx, by) => {
+    const vx = bx - ax;
+    const vy = by - ay;
+    const wx = px - ax;
+    const wy = py - ay;
+    const vv = vx * vx + vy * vy;
+    if (vv < 1e-9) return Math.hypot(px - ax, py - ay);
+    const t = Math.max(0, Math.min(1, (wx * vx + wy * vy) / vv));
+    const qx = ax + t * vx;
+    const qy = ay + t * vy;
+    return Math.hypot(px - qx, py - qy);
+  };
+
+  for (let i = 0; i < slabPoly.length; i++) {
+    const a = slabPoly[i];
+    const b = slabPoly[(i + 1) % slabPoly.length];
+    if (pointSegDist(hole.x, hole.y, a.x, a.y, b.x, b.y) + 1e-6 < r) return false;
   }
-  return (
-    hole.x - r >= 0 &&
-    hole.x + r <= ac().surface.width &&
-    hole.y - r >= 0 &&
-    hole.y + r <= ac().surface.height
-  );
+  return true;
 }
 
 function findOverlap(hole) {
@@ -1774,10 +1853,8 @@ function _updateNatureUI(nature) {
   const isSalle = nature === 'salle';
   const wW = document.getElementById('surface-width-wrap');
   const wH = document.getElementById('surface-height-wrap');
-  const wD = document.getElementById('surface-diametre-wrap');
   if (wW) wW.hidden = isCirc;
   if (wH) wH.hidden = isCirc;
-  if (wD) wD.hidden = !isCirc;
   if (ui.width) ui.width.disabled = isSalle;
   if (ui.height) ui.height.disabled = isSalle;
 }
@@ -1796,7 +1873,7 @@ function applySurfaceFromForm() {
 
   let width, height;
   if (nature === 'circulaire') {
-    const diam = Number(ui.surfaceDiametre?.value);
+    const diam = Number(ui.surfaceDiametre?.value ?? ac().surface.diametre ?? ac().surface.width);
     if (!Number.isFinite(diam) || diam <= 0) {
       setStatus('Diamètre de couche circulaire invalide.', true);
       return false;
@@ -1828,6 +1905,8 @@ function applySurfaceFromForm() {
   ac().surface.rendementForce    = !!ui.surfaceRendForceEn?.checked;
   ac().surface.rendementForceVal = Number(ui.surfaceRendForceVal?.value) || 5;
   ac().surface.positionPreset = ui.surfacePositionPreset?.value || "center";
+  const periphOffset = Number(ui.surfacePeripheralOffset?.value);
+  ac().surface.peripheralOffsetMm = Number.isFinite(periphOffset) && periphOffset > 0 ? periphOffset : 0;
   ac().surface.niveau = ui.surfaceNiveau.value.trim() !== '' ? Number(ui.surfaceNiveau.value) : null;
   const prof = Number(ui.surfaceProfondeur.value);
   ac().surface.profondeur = Number.isFinite(prof) && prof > 0 ? prof : null;
@@ -1901,6 +1980,7 @@ function saveState() {
   const payload = {
     version: 2,
     savedAt: new Date().toISOString(),
+    projectMeta: { ...state.projectMeta },
     bloc: state.bloc,
     couches: state.couches,
     activeCoucheIndex: state.activeCoucheIndex,
@@ -2057,6 +2137,7 @@ function _renderBlocContourEditor() {
 function _migrateSurface(s) {
   if (s.nature            == null) s.nature            = 'salle';
   if (s.diametre          == null) s.diametre          = s.width || 1500;
+  if (s.peripheralOffsetMm == null) s.peripheralOffsetMm = 0;
   if (s.debouchantZ4      == null) s.debouchantZ4      = false;
   if (s.rendementForce    == null) s.rendementForce    = false;
   if (s.rendementForceVal == null) s.rendementForceVal = 5;
@@ -2132,6 +2213,10 @@ function loadState(file) {
     state.selectedZoneIndex = data.selectedZoneIndex ?? null;
     state.selectedHoleIndex = data.selectedHoleIndex ?? null;
     state.selectedPlaqueConstraintId = data.selectedPlaqueConstraintId ?? null;
+    state.projectMeta = {
+      projectName: String(data.projectMeta?.projectName || ""),
+      ouvrageName: String(data.projectMeta?.ouvrageName || ""),
+    };
 
     if (data.view3d) {
       view3d.azimuth = Number.isFinite(Number(data.view3d.azimuth)) ? Number(data.view3d.azimuth) : view3d.azimuth;
@@ -2166,6 +2251,7 @@ function loadState(file) {
     _migrateLoadedState();
     // Sync all UI
     _syncBlocForm();
+    _syncProjectMetaUi();
     syncFormsToCouche();
     renderParams();
     renderSynthese();
@@ -2703,11 +2789,23 @@ function exportSolidWorks(options = {}) {  const aplanies = options.aplanies || 
   setStatus(`Macro SolidWorks exportee - ${totalHoles} carottage(s), ${coucheData.length} couche(s).`);
 }
 
-ui.surfaceForm.addEventListener("input", () => {
-  applySurfaceFromForm();
+ui.surfaceForm.addEventListener("input", (e) => {
+  const changedId = e?.target?.id;
+  const ok = applySurfaceFromForm();
+  if (!ok) return;
+  if (changedId === "surface-peripheral-offset" || changedId === "surface-nature") {
+    runAutoLayout();
+    render3D();
+  }
 });
-ui.surfaceForm.addEventListener("change", () => {
-  applySurfaceFromForm();
+ui.surfaceForm.addEventListener("change", (e) => {
+  const changedId = e?.target?.id;
+  const ok = applySurfaceFromForm();
+  if (!ok) return;
+  if (changedId === "surface-peripheral-offset" || changedId === "surface-nature") {
+    runAutoLayout();
+    render3D();
+  }
 });
 // Activer/désactiver l'input valeur rendement forcé selon la case
 ui.surfaceRendForceEn?.addEventListener("change", () => {
@@ -3194,16 +3292,106 @@ function _polyLineIntersect(pts, horizontal, coord, minC, maxC) {
  * Falls back to the bounding rectangle if no drawn contour.
  */
 function _getSlabPoly(s) {
-  if (s.nature === 'salle' &&
+  const offsetMm = Math.max(0, Number(s?.peripheralOffsetMm) || 0);
+
+  const clipByShiftedEdge = (poly, a, b, inwardSign) => {
+    if (!Array.isArray(poly) || poly.length < 3) return [];
+    const out = [];
+    const eps = 1e-7;
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+
+    const sideVal = (p) => inwardSign * (ex * (p.y - a.y) - ey * (p.x - a.x));
+    const inside = (p) => sideVal(p) >= -eps;
+
+    const intersectSegLine = (p0, p1) => {
+      const rx = p1.x - p0.x;
+      const ry = p1.y - p0.y;
+      const dx = ex;
+      const dy = ey;
+      const den = rx * dy - ry * dx;
+      if (Math.abs(den) < 1e-12) return null;
+      const qx = a.x - p0.x;
+      const qy = a.y - p0.y;
+      const t = (qx * dy - qy * dx) / den;
+      return { x: p0.x + t * rx, y: p0.y + t * ry };
+    };
+
+    let prev = poly[poly.length - 1];
+    let prevIn = inside(prev);
+    for (const cur of poly) {
+      const curIn = inside(cur);
+      if (curIn) {
+        if (!prevIn) {
+          const ip = intersectSegLine(prev, cur);
+          if (ip) out.push(ip);
+        }
+        out.push(cur);
+      } else if (prevIn) {
+        const ip = intersectSegLine(prev, cur);
+        if (ip) out.push(ip);
+      }
+      prev = cur;
+      prevIn = curIn;
+    }
+    return out;
+  };
+
+  const insetPolygon = (poly, d) => {
+    if (!Array.isArray(poly) || poly.length < 3 || d <= 0) return poly;
+    let pts = poly.map((p) => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 }));
+    if (pts.length >= 2) {
+      const first = pts[0];
+      const last = pts[pts.length - 1];
+      if (Math.hypot(last.x - first.x, last.y - first.y) < 1e-9) pts = pts.slice(0, -1);
+    }
+    if (pts.length < 3) return poly;
+
+    const area = _polyArea(pts);
+    if (Math.abs(area) < 1e-9) return poly;
+    const inwardSign = area >= 0 ? 1 : -1;
+
+    let clipped = pts;
+    for (let i = 0; i < pts.length; i++) {
+      const p0 = pts[i];
+      const p1 = pts[(i + 1) % pts.length];
+      const dx = p1.x - p0.x;
+      const dy = p1.y - p0.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-9) continue;
+      const nx = inwardSign * (-dy / len);
+      const ny = inwardSign * (dx / len);
+      const a = { x: p0.x + nx * d, y: p0.y + ny * d };
+      const b = { x: p1.x + nx * d, y: p1.y + ny * d };
+      clipped = clipByShiftedEdge(clipped, a, b, inwardSign);
+      if (clipped.length < 3) return poly;
+    }
+    if (_polyArea(clipped) < 0) clipped = clipped.slice().reverse();
+    return clipped;
+  };
+
+  let basePoly;
+  if (s.nature === 'circulaire') {
+    const d = Math.max(1, Number(s.diametre) || Number(s.width) || 1);
+    const r = d * 0.5;
+    const cx = r;
+    const cy = r;
+    const steps = 96;
+    basePoly = Array.from({ length: steps }, (_, i) => {
+      const a = (i / steps) * Math.PI * 2;
+      return { x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r };
+    });
+  } else if (s.nature === 'salle' &&
       state.bloc.contourClosed &&
       Array.isArray(state.bloc.contourPoints) &&
       state.bloc.contourPoints.length >= 3) {
-    let pts = state.bloc.contourPoints.map(p => ({ x: p.x, y: p.y }));
-    if (_polyArea(pts) < 0) pts = pts.slice().reverse(); // ensure CW (positive area)
-    return pts;
+    basePoly = state.bloc.contourPoints.map(p => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 }));
+  } else {
+    basePoly = [{ x: 0, y: 0 }, { x: s.width, y: 0 }, { x: s.width, y: s.height }, { x: 0, y: s.height }];
   }
-  // Fallback: rectangle
-  return [{ x: 0, y: 0 }, { x: s.width, y: 0 }, { x: s.width, y: s.height }, { x: 0, y: s.height }];
+
+  if (_polyArea(basePoly) < 0) basePoly = basePoly.slice().reverse();
+  return insetPolygon(basePoly, offsetMm);
 }
 
 /**
@@ -4593,6 +4781,49 @@ ui.loadInput?.addEventListener("change", (e) => {
 ui.exportSwBtn?.addEventListener("click", openSwExportModal);
 
 // ── Export AutoCAD 2D ───────────────────────────────────────────────────────
+function _acadR1(v) {
+  return Math.round((Number(v) || 0) * 10) / 10;
+}
+
+function _acadLineCmd(a, b) {
+  // Ligne reste active en script tant qu'un Enter final n'est pas envoyé.
+  // Le \n terminal force l'arrêt du trait avant la commande suivante.
+  return `ligne ${_acadR1(a.x)},${_acadR1(a.y)} ${_acadR1(b.x)},${_acadR1(b.y)}\n`;
+}
+
+function _acadSegmentsForCouche(couche) {
+  const out = [];
+  const seen = new Set();
+  const pushSeg = (a, b) => {
+    const ax = _acadR1(a?.x);
+    const ay = _acadR1(a?.y);
+    const bx = _acadR1(b?.x);
+    const by = _acadR1(b?.y);
+    if (!Number.isFinite(ax) || !Number.isFinite(ay) || !Number.isFinite(bx) || !Number.isFinite(by)) return;
+    if (Math.abs(ax - bx) < 1e-6 && Math.abs(ay - by) < 1e-6) return;
+    const aK = `${ax},${ay}`;
+    const bK = `${bx},${by}`;
+    const key = aK < bK ? `${aK}|${bK}` : `${bK}|${aK}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ a: { x: ax, y: ay }, b: { x: bx, y: by } });
+  };
+
+  const cutSegments = _metreCollectSciageSegments(couche?.plaques || []);
+  for (const seg of cutSegments) {
+    pushSeg(seg.a, seg.b);
+  }
+
+  const slabPoly = _getSlabPoly(couche?.surface || {});
+  if (Array.isArray(slabPoly) && slabPoly.length >= 3) {
+    for (let i = 0; i < slabPoly.length; i++) {
+      pushSeg(slabPoly[i], slabPoly[(i + 1) % slabPoly.length]);
+    }
+  }
+
+  return out;
+}
+
 function _generateAcadScript(coucheIndex) {
   const c = state.couches[coucheIndex];
   if (!c) return '';
@@ -4613,6 +4844,11 @@ function _generateAcadScript(coucheIndex) {
   for (const h of c.holes) {
     const r = Math.round(h.diameter / 2);
     lines.push(`cercle ${h.x},${h.y} ${r}`);
+  }
+
+  // Traits de coupe (table découpe) + périphérie géométrique réelle de la couche
+  for (const seg of _acadSegmentsForCouche(c)) {
+    lines.push(_acadLineCmd(seg.a, seg.b));
   }
 
   return lines.join('\n');
@@ -4801,17 +5037,22 @@ function renderZones() {
 }
 
 // Afficher/masquer les champs sous-zone selon le type sélectionné
+function _hideSouszoneZoneFields() {
+  ui.souzoneDiameterLabel.hidden = true;
+  ui.souzoneRecouvrementLabel.hidden = true;
+  ui.souzoneSmartLabel.hidden = true;
+  ui.souzoneSmartDiamsLabel.hidden = true;
+  ui.souzoneSmartAreaLabel.hidden = true;
+  ui.souzoneSmartOverlapLabel.hidden = true;
+  ui.souzonePontLabel.hidden = true;
+  if (ui.souzoneRendForceLabel) ui.souzoneRendForceLabel.hidden = true;
+}
+
 ui.zoneType.addEventListener("change", () => {
-  const isSouszone = ui.zoneType.value === "souszone";
-  ui.souzoneDiameterLabel.hidden    = !isSouszone;
-  ui.souzoneRecouvrementLabel.hidden = !isSouszone;
-  ui.souzoneSmartLabel.hidden        = !isSouszone;
-  ui.souzoneSmartDiamsLabel.hidden   = !isSouszone;
-  ui.souzoneSmartAreaLabel.hidden    = !isSouszone;
-  ui.souzoneSmartOverlapLabel.hidden = !isSouszone;
-  ui.souzonePontLabel.hidden         = !isSouszone;
-  if (ui.souzoneRendForceLabel) ui.souzoneRendForceLabel.hidden = !isSouszone;
+  _hideSouszoneZoneFields();
 });
+
+_hideSouszoneZoneFields();
 
 ui.zoneForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -4868,14 +5109,7 @@ ui.zoneForm.addEventListener("submit", (event) => {
   render3D();
   ui.zoneForm.reset();
   ui.zoneType.value = "exclusion";
-  ui.souzoneDiameterLabel.hidden    = true;
-  ui.souzoneRecouvrementLabel.hidden = true;
-  ui.souzoneSmartLabel.hidden        = true;
-  ui.souzoneSmartDiamsLabel.hidden   = true;
-  ui.souzoneSmartAreaLabel.hidden    = true;
-  ui.souzoneSmartOverlapLabel.hidden = true;
-  ui.souzonePontLabel.hidden         = true;
-  if (ui.souzoneRendForceLabel) ui.souzoneRendForceLabel.hidden = true;
+  _hideSouszoneZoneFields();
   ui.zoneW.value = "500";
   ui.zoneH.value = "500";
   ui.zoneProfondeur.value = "";
@@ -4910,16 +5144,8 @@ function openZoneEdit(idx) {
   ui.zoneH.value          = z.h;
 
   ui.zoneProfondeur.value = z.profondeur != null ? z.profondeur : "";
-  const isSouszone = z.type === "souszone";
-  ui.souzoneDiameterLabel.hidden     = !isSouszone;
-  ui.souzoneRecouvrementLabel.hidden = !isSouszone;
-  ui.souzoneSmartLabel.hidden        = !isSouszone;
-  ui.souzoneSmartDiamsLabel.hidden   = !isSouszone;
-  ui.souzoneSmartAreaLabel.hidden    = !isSouszone;
-  ui.souzoneSmartOverlapLabel.hidden = !isSouszone;
-  ui.souzonePontLabel.hidden         = !isSouszone;
-  if (ui.souzoneRendForceLabel) ui.souzoneRendForceLabel.hidden = !isSouszone;
-  if (isSouszone) {
+  _hideSouszoneZoneFields();
+  if (z.type === "souszone") {
     ui.zoneDiameter.value   = z.diameter || "";
     ui.zoneRecouvrement.value = z.recouvrement ?? "";
     if (ui.zoneSmartDiam)       ui.zoneSmartDiam.checked     = !!z.smartDiam;
@@ -4951,9 +5177,7 @@ document.getElementById("zones-body").addEventListener("click", (event) => {
       document.querySelector("#zone-form button[type='submit']").textContent = "Ajouter la zone";
       ui.zoneForm.reset();
       ui.zoneType.value = "exclusion";
-      ui.souzoneDiameterLabel.hidden = true;
-      ui.souzoneRecouvrementLabel.hidden = true;
-      if (ui.souzoneRendForceLabel) ui.souzoneRendForceLabel.hidden = true;
+      _hideSouszoneZoneFields();
       ui.zoneW.value = "500"; ui.zoneH.value = "500";
     }
     renderZones(); renderPlan();
@@ -5029,33 +5253,9 @@ function renderCouches() {
       renderPlan();
     });
 
-    const filtersDiv = document.createElement("div");
-    filtersDiv.className = "couche-filters";
-    const filterDefs = [
-      { key: "displayIntersections", label: "Restants d'intersections", def: true  },
-      { key: "displaySolid",         label: "Dalle béton équivalente",    def: false },
-    ];
-    for (const { key, label, def } of filterDefs) {
-      if (couche.surface[key] === undefined) couche.surface[key] = def;
-      const fLbl = document.createElement("label");
-      fLbl.className = "couche-filter-item";
-      const chk = document.createElement("input");
-      chk.type = "checkbox";
-      chk.checked = !!couche.surface[key];
-      chk.addEventListener("change", (e) => {
-        couche.surface[key] = e.target.checked;
-        render3D();
-      });
-      fLbl.addEventListener("click", e => e.stopPropagation());
-      fLbl.appendChild(chk);
-      fLbl.appendChild(document.createTextNode("\u00a0" + label));
-      filtersDiv.appendChild(fLbl);
-    }
-
     const wrapper = document.createElement("div");
     wrapper.className = "couche-row";
     wrapper.appendChild(btn);
-    wrapper.appendChild(filtersDiv);
     ui.couchesBody.appendChild(wrapper);
   });
 }
@@ -5076,6 +5276,7 @@ function syncFormsToCouche() {
     ui.surfaceRendForceVal.disabled = !s.rendementForce;
   }
   if (ui.surfacePositionPreset) ui.surfacePositionPreset.value = s.positionPreset || "center";
+  if (ui.surfacePeripheralOffset) ui.surfacePeripheralOffset.value = String(Math.max(0, Number(s.peripheralOffsetMm) || 0));
   if (ui.surfaceOffsetX) ui.surfaceOffsetX.value = String(s.offsetX ?? 0);
   if (ui.surfaceOffsetZ) ui.surfaceOffsetZ.value = String(s.offsetZ ?? 0);
   if (ui.surfaceRotation) ui.surfaceRotation.value = String(Math.round(((s.rotation || 0) * 180 / Math.PI) * 100) / 100);
@@ -5672,19 +5873,7 @@ ui.svg.addEventListener("mousedown", (event) => {
     const _sv2 = eventToSvgCoords(event);
     const _mmX = (_sv2.x - _tf2.offsetX) / _tf2.scale;
     const _mmY = (_sv2.y - _tf2.offsetY) / _tf2.scale;
-    const _step2 = (_s2.showGrid && _s2.gridStep > 0) ? _s2.gridStep : 500;
-    const _snaps = [];
-    for (let _mx = 0; _mx <= _W2; _mx += _step2)
-      for (let _my = 0; _my <= _H2; _my += _step2)
-        _snaps.push({ x: _mx, y: _my });
-    const _holes2 = ac().holes;
-    const _seen2 = new Set();
-    for (let _i = 0; _i < _holes2.length - 1; _i++)
-      for (let _j = _i + 1; _j < _holes2.length; _j++)
-        for (const _p2 of _circleIntersections(_holes2[_i], _holes2[_j])) {
-          const _k = _p2.x + ',' + _p2.y;
-          if (!_seen2.has(_k)) { _seen2.add(_k); _snaps.push(_p2); }
-        }
+    const _snaps = _measureSnapPoints();
     const _thr = 30;
     let _best = null, _bestD2 = _thr * _thr;
     for (const _p of _snaps) {
@@ -6032,9 +6221,10 @@ applySurfaceFromForm();
 renderTable();
 renderZones();
 renderCouches();
+_syncProjectMetaUi();
 
 // ── Bloc béton global ─────────────────────────────────────────────────────────
-function _applyBlocAndRefresh() {
+function _applyBlocAndRefresh(forceRecalepinage = false) {
   _ensureBlocContourDefaults();
   const vW = Number(document.getElementById("bloc-width")?.value);
   const vD = Number(document.getElementById("bloc-depth")?.value);
@@ -6062,14 +6252,19 @@ function _applyBlocAndRefresh() {
 
   applyAllCouchePresetOffsets();
   _renderBlocContourEditor();
-  renderPlan();
-  if (!document.getElementById("main-tab-3d")?.hidden) render3D();
+  if (forceRecalepinage) {
+    runAutoLayout();
+    render3D();
+  } else {
+    renderPlan();
+    if (!document.getElementById("main-tab-3d")?.hidden) render3D();
+  }
 }
 
 // Appliquer au submit (bouton) ET en direct sur chaque champ
 document.getElementById("bloc-form")?.addEventListener("submit", (e) => {
   e.preventDefault();
-  _applyBlocAndRefresh();
+  _applyBlocAndRefresh(true);
 });
 ["bloc-width", "bloc-depth", "bloc-height", "bloc-niveau"].forEach(id => {
   document.getElementById(id)?.addEventListener("input", _applyBlocAndRefresh);
@@ -6659,8 +6854,8 @@ function _drawEd_apply() {
   document.getElementById('bloc-width').value = String(w);
   document.getElementById('bloc-depth').value = String(d);
   _syncBlocForm(); applyAllCouchePresetOffsets(); _renderBlocContourEditor();
-  renderPlan();
-  if (!document.getElementById('main-tab-3d')?.hidden) render3D();
+  runAutoLayout();
+  render3D();
   setStatus(`Contour dalle appliqué — ${pts.length} sommets, emprise ${w} × ${d} mm.`);
   _drawEd_close();
 }
@@ -7912,6 +8107,7 @@ renderPlansSpeciaux();
 // ══════════════════════════════════════════════════════════════════════════════
 
 const SYNTH_LS_KEY = 'synthese_params';
+const DEFAULT_PDF_LEGAL_FOOTER = '© Ce document est la propriété de NUVIA Structure – il ne peut être reproduit ou divulgué sans autorisation écrite préalable';
 
 const syntheseState = {
   rendTableId:       null,   // ID du tableau de rendement sélectionné
@@ -7928,6 +8124,7 @@ const syntheseState = {
   sciageCableHParMl: 1,        // h/ml si epaisseur >= seuil
   carottageHUnitaire: 1,       // h/unite
   sousFaceHParM2: 1,           // h/m2 si non debouchant Z4
+  pdfLegalFooterText: DEFAULT_PDF_LEGAL_FOOTER,
 };
 
 function synthLoadFromLS() {
@@ -7940,6 +8137,7 @@ function synthLoadFromLS() {
   if (syntheseState.sciageCableHParMl == null) syntheseState.sciageCableHParMl = 1;
   if (syntheseState.carottageHUnitaire == null) syntheseState.carottageHUnitaire = 1;
   if (syntheseState.sousFaceHParM2 == null) syntheseState.sousFaceHParM2 = 1;
+  if (syntheseState.pdfLegalFooterText == null) syntheseState.pdfLegalFooterText = DEFAULT_PDF_LEGAL_FOOTER;
 }
 
 function synthSaveToLS() {
@@ -8608,6 +8806,10 @@ function _metreFmt(v, dec = 2) {
   return Number(v).toFixed(dec);
 }
 
+function _metreNaturalCompareText(a, b) {
+  return String(a || '').localeCompare(String(b || ''), 'fr', { numeric: true, sensitivity: 'base' });
+}
+
 function _metrePlaquePoly(pl) {
   if (Array.isArray(pl?.poly) && pl.poly.length >= 3) {
     return pl.poly.map(pt => ({ x: Number(pt.x) || 0, y: Number(pt.y) || 0 }));
@@ -8703,15 +8905,17 @@ function _metreSciageSchemaHtml(couche, mode, rows = []) {
 
   const periphLines = rows
     .map((r, i) => {
+      const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1));
       const shared = r.type === 'jonction interplaque';
       const a = project({ x: r.x1, y: r.y1 });
       const b = project({ x: r.x2, y: r.y2 });
-      return `<line class="metre-cut-line ${shared ? 'is-shared' : 'is-outer'} metre-schema-item" data-metre-item-idx="${i + 1}" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" />`;
+      return `<line class="metre-cut-line ${shared ? 'is-shared' : 'is-outer'} metre-schema-item" data-metre-item-idx="${no}" x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" />`;
     })
     .join('');
 
   const periphLabels = rows
     .map((r, i) => {
+      const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1));
       const a = project({ x: r.x1, y: r.y1 });
       const b = project({ x: r.x2, y: r.y2 });
       const dx = b.x - a.x;
@@ -8725,18 +8929,19 @@ function _metreSciageSchemaHtml(couche, mode, rows = []) {
       const off = clamp(fs * 0.8, 5, 10);
       const lx = mx + nx * off;
       const ly = my + ny * off;
-      return `<text class="metre-schema-label" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="${fs.toFixed(1)}">${i + 1}</text>`;
+      return `<text class="metre-schema-label" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="${fs.toFixed(1)}">${no}</text>`;
     })
     .join('');
 
   const highlightSurfaces = rows
     .map((r, i) => (Array.isArray(r.poly) && r.poly.length >= 3)
-      ? `<path class="metre-plate-shape metre-schema-item" data-metre-item-idx="${i + 1}" d="${pathFromPoly(r.poly)}" />`
+      ? `<path class="metre-plate-shape metre-schema-item" data-metre-item-idx="${Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1))}" d="${pathFromPoly(r.poly)}" />`
       : '')
     .join('');
 
   const surfaceLabels = rows
     .map((r, i) => {
+      const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1));
       if (!Array.isArray(r.poly) || r.poly.length < 3) return '';
       const pts = r.poly.map(project);
       if (!pts.length) return '';
@@ -8751,7 +8956,7 @@ function _metreSciageSchemaHtml(couche, mode, rows = []) {
       const fs = clamp(minDim * 0.28, 8, 18);
       const cx = sx / pts.length;
       const cy = sy / pts.length;
-      return `<text class="metre-schema-label" x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" font-size="${fs.toFixed(1)}">${i + 1}</text>`;
+      return `<text class="metre-schema-label" x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" font-size="${fs.toFixed(1)}">${no}</text>`;
     })
     .join('');
 
@@ -8784,11 +8989,12 @@ function _metrePlaquesSchemaHtml(couche, rows, schemaKind = 'plaques', title = '
   const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
   const shapes = rows
     .map((r, i) => (Array.isArray(r.poly) && r.poly.length >= 3)
-      ? `<path class="metre-plate-shape metre-schema-item" data-metre-item-idx="${i + 1}" d="${pathFromPoly(r.poly)}" />`
+      ? `<path class="metre-plate-shape metre-schema-item" data-metre-item-idx="${Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1))}" d="${pathFromPoly(r.poly)}" />`
       : '')
     .join('');
   const labels = rows
     .map((r, i) => {
+      const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1));
       if (!Array.isArray(r.poly) || r.poly.length < 3) return '';
       const pts = r.poly.map(project);
       if (!pts.length) return '';
@@ -8803,7 +9009,7 @@ function _metrePlaquesSchemaHtml(couche, rows, schemaKind = 'plaques', title = '
       const fs = clamp(minDim * 0.28, 8, 18);
       const cx = sx / pts.length;
       const cy = sy / pts.length;
-      return `<text class="metre-schema-label" x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" font-size="${fs.toFixed(1)}">${i + 1}</text>`;
+      return `<text class="metre-schema-label" x="${cx.toFixed(1)}" y="${cy.toFixed(1)}" font-size="${fs.toFixed(1)}">${no}</text>`;
     })
     .join('');
   return `
@@ -8824,15 +9030,17 @@ function _metreCarottageSchemaHtml(couche, rows) {
   const { vbW, vbH, slabPath, project } = g;
   const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
   const circles = rows.map((r, i) => {
+    const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1));
     const c = project({ x: r.x, y: r.y });
     const rr = Math.max(3.5, (Math.max(1, Number(r.diam) || 1) * 0.5) * ((vbW - 32) / Math.max(1, Number(couche?.surface?.width) || 1)));
-    return `<circle class="metre-hole-shape metre-schema-item" data-metre-item-idx="${i + 1}" cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${rr.toFixed(1)}" />`;
+    return `<circle class="metre-hole-shape metre-schema-item" data-metre-item-idx="${no}" cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${rr.toFixed(1)}" />`;
   }).join('');
   const labels = rows.map((r, i) => {
+    const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1));
     const c = project({ x: r.x, y: r.y });
     const rr = Math.max(3.5, (Math.max(1, Number(r.diam) || 1) * 0.5) * ((vbW - 32) / Math.max(1, Number(couche?.surface?.width) || 1)));
     const fs = clamp(rr * 0.95, 8, 14);
-    return `<text class="metre-schema-label metre-hole-label" x="${c.x.toFixed(1)}" y="${c.y.toFixed(1)}" font-size="${fs.toFixed(1)}">${i + 1}</text>`;
+    return `<text class="metre-schema-label metre-hole-label" x="${c.x.toFixed(1)}" y="${c.y.toFixed(1)}" font-size="${fs.toFixed(1)}">${no}</text>`;
   }).join('');
 
   return `
@@ -9310,6 +9518,9 @@ async function exportMetrePdf() {
     const footerY = pageH - 6;
     const now = new Date();
     const dateTxt = now.toLocaleDateString('fr-FR') + ' ' + now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const projectName = String(state.projectMeta?.projectName || '').trim() || 'XXXX';
+    const ouvrageName = String(state.projectMeta?.ouvrageName || '').trim() || 'XXXX';
+    const legalFooter = String(syntheseState.pdfLegalFooterText || '').trim() || DEFAULT_PDF_LEGAL_FOOTER;
 
     const drawHeader = (title) => {
       if (logo?.dataUrl) {
@@ -9324,7 +9535,8 @@ async function exportMetrePdf() {
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(10);
       doc.setTextColor(31, 52, 71);
-      doc.text(title, pageW - marginX, 13, { align: 'right' });
+      const headerTitle = `${projectName} - ${ouvrageName} - ${title}`;
+      doc.text(headerTitle, pageW - marginX, 13, { align: 'right' });
     };
 
     // Page de garde
@@ -9343,8 +9555,9 @@ async function exportMetrePdf() {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(13);
     doc.setTextColor(64, 80, 96);
-    doc.text(`Couche : ${String(couche?.label || 'Couche active')}`, marginX, 104);
-    doc.text(`Date : ${dateTxt}`, marginX, 114);
+    doc.text(`Projet : ${projectName}`, marginX, 104);
+    doc.text(`Voile/Dalle : ${ouvrageName}`, marginX, 114);
+    doc.text(`Date : ${dateTxt}`, marginX, 124);
     doc.setFontSize(10);
     doc.setTextColor(107, 128, 153);
     doc.text('Nuvia Structure - Export PDF Métré', marginX, pageH - 18);
@@ -9424,8 +9637,24 @@ async function exportMetrePdf() {
     doc.setTextColor(64, 80, 96);
     let yToc = 40;
     toc.forEach((item) => {
-      const txt = `${item.label} ${'.'.repeat(Math.max(3, 66 - item.label.length))} ${item.page}`;
-      doc.text(txt, marginX, yToc);
+      const leftX = marginX;
+      const rightX = pageW - marginX;
+      const pageTxt = String(item.page);
+      const labelTxt = String(item.label || '');
+
+      doc.text(labelTxt, leftX, yToc);
+      doc.text(pageTxt, rightX, yToc, { align: 'right' });
+
+      const labelW = doc.getTextWidth(labelTxt);
+      const pageWtxt = doc.getTextWidth(pageTxt);
+      const dotsStartX = leftX + labelW + 2;
+      const dotsEndX = rightX - pageWtxt - 2;
+      const dotsSpace = dotsEndX - dotsStartX;
+      if (dotsSpace > 4) {
+        const dotW = Math.max(0.2, doc.getTextWidth('.'));
+        const dotsCount = Math.max(3, Math.floor(dotsSpace / dotW));
+        doc.text('.'.repeat(dotsCount), dotsStartX, yToc);
+      }
       yToc += 7;
     });
 
@@ -9435,6 +9664,10 @@ async function exportMetrePdf() {
       doc.setDrawColor(222, 230, 238);
       doc.line(marginX, pageH - 10, pageW - marginX, pageH - 10);
       doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(107, 128, 153);
+      const legalLines = doc.splitTextToSize(legalFooter, pageW - (marginX * 2) - 28).slice(0, 2);
+      doc.text(legalLines, marginX, pageH - 7.5);
       doc.setFontSize(9);
       doc.setTextColor(107, 128, 153);
       doc.text(`Page ${p} / ${totalPages}`, pageW - marginX, footerY, { align: 'right' });
@@ -9487,18 +9720,20 @@ function _computeMetreData(couche) {
       type: pl?.isConstrained ? 'contrainte' : 'libre',
       poly,
     };
-  }).sort((a, b) => String(a.label).localeCompare(String(b.label), 'fr') || (a.idx - b.idx));
+  }).sort((a, b) => _metreNaturalCompareText(a.label, b.label) || (a.idx - b.idx));
+  plaqueRows.forEach((r, i) => { r.schemaNo = i + 1; });
 
   const totalPlaquesMassKg = plaqueRows.reduce((acc, r) => acc + r.massKg, 0);
   const _massFromAreaAndThickness = (areaM2, epaisseurMm) => Math.max(0, Number(areaM2) || 0) * Math.max(0, Number(epaisseurMm) || 0) * 2.5;
-  const plaqueRowsActive = plaqueRows.map((r) => ({ ...r, epaisseur: thicknessActive, massKg: _massFromAreaAndThickness(r.areaM2, thicknessActive) }));
-  const plaqueRowsInactive = plaqueRows.map((r) => ({ ...r, epaisseur: thicknessInactive, massKg: _massFromAreaAndThickness(r.areaM2, thicknessInactive) }));
+  const plaqueRowsActive = plaqueRows.map((r) => ({ ...r, schemaNo: r.schemaNo, epaisseur: thicknessActive, massKg: _massFromAreaAndThickness(r.areaM2, thicknessActive) }));
+  const plaqueRowsInactive = plaqueRows.map((r) => ({ ...r, schemaNo: r.schemaNo, epaisseur: thicknessInactive, massKg: _massFromAreaAndThickness(r.areaM2, thicknessInactive) }));
   const totalPlaquesMassActiveKg = plaqueRowsActive.reduce((acc, r) => acc + r.massKg, 0);
   const totalPlaquesMassInactiveKg = plaqueRowsInactive.reduce((acc, r) => acc + r.massKg, 0);
 
   const cutSegments = _metreCollectSciageSegments(plaques);
   const cutRows = cutSegments.map((seg, i) => ({
     idx: i + 1,
+    schemaNo: i + 1,
     type: seg.count > 1 ? 'jonction interplaque' : 'périphérie extérieure',
     x1: seg.a.x,
     y1: seg.a.y,
@@ -9559,7 +9794,8 @@ function _computeMetreData(couche) {
     });
   }
 
-  holeRows.sort((a, b) => String(a.label).localeCompare(String(b.label), 'fr') || (a.idx - b.idx));
+  holeRows.sort((a, b) => _metreNaturalCompareText(a.label, b.label) || (a.idx - b.idx));
+  holeRows.forEach((r, i) => { r.schemaNo = i + 1; });
 
   const totalCarottageH = holeRows.reduce((acc, r) => acc + r.indivH, 0);
   const totalCarottageMassDaN = holeRows.reduce((acc, r) => {
@@ -9616,14 +9852,15 @@ function renderMetre() {
     .replace(/"/g, '&quot;');
   const sciageRowsHtml = (rate, isActive, mode = 'ml') => {
     const rows = data.cutRows.map(r => {
+      const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || 1);
       const tH = isActive ? (r.lengthMl * rate) : 0;
       const surfM2 = (r.lengthMl * data.thickness) / 1000;
       const info = mode === 'm2'
-        ? `Trait n°${r.idx} — ${r.type} — ${_metreFmt(surfM2, 3)} m² (${_metreFmt(r.lengthMl, 3)} ml) — temps individuel ${_metreFmt(tH, 3)} h — de (${_metreFmt(r.x1, 1)} ; ${_metreFmt(r.y1, 1)}) à (${_metreFmt(r.x2, 1)} ; ${_metreFmt(r.y2, 1)})`
-        : `Trait n°${r.idx} — ${r.type} — ${_metreFmt(r.lengthMl, 3)} ml — temps individuel ${_metreFmt(tH, 3)} h — de (${_metreFmt(r.x1, 1)} ; ${_metreFmt(r.y1, 1)}) à (${_metreFmt(r.x2, 1)} ; ${_metreFmt(r.y2, 1)})`;
+        ? `Trait n°${no} — ${r.type} — ${_metreFmt(surfM2, 3)} m² (${_metreFmt(r.lengthMl, 3)} ml) — temps individuel ${_metreFmt(tH, 3)} h — de (${_metreFmt(r.x1, 1)} ; ${_metreFmt(r.y1, 1)}) à (${_metreFmt(r.x2, 1)} ; ${_metreFmt(r.y2, 1)})`
+        : `Trait n°${no} — ${r.type} — ${_metreFmt(r.lengthMl, 3)} ml — temps individuel ${_metreFmt(tH, 3)} h — de (${_metreFmt(r.x1, 1)} ; ${_metreFmt(r.y1, 1)}) à (${_metreFmt(r.x2, 1)} ; ${_metreFmt(r.y2, 1)})`;
       return `
-        <tr data-metre-row-kind="periph" data-metre-item-idx="${r.idx}" data-metre-info="${escAttr(info)}">
-          <td style="text-align:right">${r.idx}</td>
+        <tr data-metre-row-kind="periph" data-metre-item-idx="${no}" data-metre-info="${escAttr(info)}">
+          <td style="text-align:right">${no}</td>
           <td>${esc(r.type)}</td>
           <td style="text-align:right">${_metreFmt(r.x1, 1)}</td>
           <td style="text-align:right">${_metreFmt(r.y1, 1)}</td>
@@ -9646,7 +9883,7 @@ function renderMetre() {
   };
   const sciageBottomRowsHtml = (rate) => {
     const rows = data.plaqueRows.map((r, i) => {
-      const idx = i + 1;
+      const idx = Math.max(1, Number(r?.schemaNo) || (i + 1));
       const tH = r.areaM2 * rate;
       const info = `Plaque n°${idx} — ${r.label} — ${_metreFmt(r.areaM2, 3)} m² — temps ${_metreFmt(tH, 3)} h`;
       return `
@@ -9668,10 +9905,11 @@ function renderMetre() {
   };
   const plaqueTableHtml = (rowsData, rowKind, totalMassKg) => {
     const rows = rowsData.map((r, i) => {
-      const idx = i + 1;
+      const idx = Math.max(1, Number(r?.schemaNo) || (i + 1));
       const info = `Plaque n°${idx} — ${r.label} — dimensions ${_metreFmt(r.w, 1)} × ${_metreFmt(r.h, 1)} mm — épaisseur ${_metreFmt(r.epaisseur, 1)} mm — ${_metreFmt(r.areaM2, 3)} m² — ${_metreFmt(r.massKg, 1)} kg`;
       return `
       <tr data-metre-row-kind="${rowKind}" data-metre-item-idx="${idx}" data-metre-info="${escAttr(info)}">
+        <td style="text-align:right">${idx}</td>
         <td>${esc(r.label)}</td>
         <td style="text-align:right">${_metreFmt(r.x, 1)}</td>
         <td style="text-align:right">${_metreFmt(r.y, 1)}</td>
@@ -9686,9 +9924,9 @@ function renderMetre() {
     }).join('');
     return `
       <table class="metre-table">
-        <thead><tr><th>Plaque</th><th>X (mm)</th><th>Y (mm)</th><th>Largeur (mm)</th><th>Longueur (mm)</th><th>Épaisseur (mm)</th><th>Surface (m²)</th><th>Masse (kg)</th><th>Type</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:#6b8099">Aucune plaque.</td></tr>'}</tbody>
-        <tfoot><tr><th colspan="7" style="text-align:right">Masse totale</th><th style="text-align:right">${_metreFmt(totalMassKg, 1)}</th><th></th></tr></tfoot>
+        <thead><tr><th>N°</th><th>Plaque</th><th>X (mm)</th><th>Y (mm)</th><th>Largeur (mm)</th><th>Longueur (mm)</th><th>Épaisseur (mm)</th><th>Surface (m²)</th><th>Masse (kg)</th><th>Type</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="10" style="text-align:center;color:#6b8099">Aucune plaque.</td></tr>'}</tbody>
+        <tfoot><tr><th colspan="8" style="text-align:right">Masse totale</th><th style="text-align:right">${_metreFmt(totalMassKg, 1)}</th><th></th></tr></tfoot>
       </table>
     `;
   };
@@ -9715,10 +9953,11 @@ function renderMetre() {
   } else if (metreState.activeTab === 'carottages') {
     const schema = _metreCarottageSchemaHtml(couche, data.holeRows);
     const rows = data.holeRows.map((r, i) => {
-      const idx = i + 1;
+      const idx = Math.max(1, Number(r?.schemaNo) || (i + 1));
       const info = `Carottage n°${idx} — ${r.label} — Ø ${Math.round(r.diam)} mm — temps individuel ${_metreFmt(r.indivH, 2)} h — (${_metreFmt(r.x, 1)} ; ${_metreFmt(r.y, 1)})`;
       return `
       <tr data-metre-row-kind="holes" data-metre-item-idx="${idx}" data-metre-info="${escAttr(info)}">
+        <td style="text-align:right">${idx}</td>
         <td>${esc(r.label)}</td>
         <td style="text-align:right">${_metreFmt(r.x, 1)}</td>
         <td style="text-align:right">${_metreFmt(r.y, 1)}</td>
@@ -9733,11 +9972,11 @@ function renderMetre() {
     tableHtml = `
       ${schema}
       <table class="metre-table">
-        <thead><tr><th>Carottage</th><th>X (mm)</th><th>Y (mm)</th><th>Diamètre (mm)</th><th>Hauteur (mm)</th><th>Maillage</th><th>Temps individuel (h)</th><th>Origine</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:#6b8099">Aucun carottage.</td></tr>'}</tbody>
+        <thead><tr><th>N°</th><th>Carottage</th><th>X (mm)</th><th>Y (mm)</th><th>Diamètre (mm)</th><th>Hauteur (mm)</th><th>Maillage</th><th>Temps individuel (h)</th><th>Origine</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:#6b8099">Aucun carottage.</td></tr>'}</tbody>
         <tfoot>
-          <tr><th colspan="6" style="text-align:right">Total heures carottages</th><th style="text-align:right">${_metreFmt(data.totalCarottageH, 2)}</th><th></th></tr>
-          <tr><th colspan="6" style="text-align:right">Masse totale carottages (daN)</th><th style="text-align:right">${_metreFmt(data.totalCarottageMassDaN, 1)}</th><th></th></tr>
+          <tr><th colspan="7" style="text-align:right">Total heures carottages</th><th style="text-align:right">${_metreFmt(data.totalCarottageH, 2)}</th><th></th></tr>
+          <tr><th colspan="7" style="text-align:right">Masse totale carottages (daN)</th><th style="text-align:right">${_metreFmt(data.totalCarottageMassDaN, 1)}</th><th></th></tr>
         </tfoot>
       </table>
     `;
@@ -9931,6 +10170,11 @@ function renderParams() {
             <input type="number" id="params-sousface-hm2" class="synth-input" min="0" step="0.1" value="${p.sousFaceHParM2}" />
           </div>
 
+          <div class="synth-param-group synth-param-span3">
+            <label class="synth-label">Texte légal de pied de page PDF</label>
+            <textarea id="params-pdf-footer-text" class="synth-input" rows="3" style="width:100%;resize:vertical">${_rendEsc(p.pdfLegalFooterText || DEFAULT_PDF_LEGAL_FOOTER)}</textarea>
+          </div>
+
         </div>
         <p class="synth-formula-note">
           Calepinage plaques : Sciage = périmètre unique (ml) &times; taux scie (murale/câble selon épaisseur),
@@ -9969,6 +10213,12 @@ function renderParams() {
   _bindChantierNum('params-sciage-murale',  'sciageMuraleHParMl');
   _bindChantierNum('params-sciage-cable',   'sciageCableHParMl');
   _bindChantierNum('params-sousface-hm2',   'sousFaceHParM2');
+
+  document.getElementById('params-pdf-footer-text')?.addEventListener('change', e => {
+    const v = String(e.target.value || '').trim();
+    syntheseState.pdfLegalFooterText = v || DEFAULT_PDF_LEGAL_FOOTER;
+    synthSaveToLS();
+  });
 }
 
 
@@ -10631,6 +10881,10 @@ function _openAcadModalForPhase(phase) {
       }
       for (const h of c.holes)
         lines.push('cercle ' + h.x + ',' + h.y + ' ' + Math.round(h.diameter / 2));
+
+      for (const seg of _acadSegmentsForCouche(c)) {
+        lines.push(_acadLineCmd(seg.a, seg.b));
+      }
     });
     return lines.join('\n');
   };
