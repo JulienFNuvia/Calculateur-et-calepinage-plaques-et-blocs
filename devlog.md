@@ -44,5 +44,3 @@ Contactez moi si bug majeur détecté ou idées/features à ajouter : julien.fum
 
 10. Lisibilité schémas carottages améliorée  
 - Décalage renforcé des numéros hors cercles, anti-chevauchement et anti-coupure bord image.
-
-Si tu veux, je peux te faire une version “journal de release” datée (format client) en 8 à 12 lignes prête à coller dans le devlog.
