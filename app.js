@@ -4761,7 +4761,7 @@ async function _runProceduralGeneration(config = {}) {
   const runMode = config.runMode === "target" ? "target" : "fixed";
   const objective = config.objective === "plates" ? "plates" : "time";
 
-  const iterationsTarget = Math.max(1, Math.min(100000, Math.round(Number(config.iterationsTarget) || 0)));
+  const iterationsTarget = Math.max(1, Math.min(1000000, Math.round(Number(config.iterationsTarget) || 0)));
   const stopThreshold = Number(config.stopThreshold);
   const timeBudgetMs = Math.max(1000, Math.min(120000, Math.round(Number(config.timeBudgetMs) || 0)));
 
@@ -4807,7 +4807,7 @@ async function _runProceduralGeneration(config = {}) {
 
   const top = [];
   const startedAt = Date.now();
-  const hardCap = runMode === "fixed" ? iterationsTarget : 100000;
+  const hardCap = runMode === "fixed" ? iterationsTarget : 1000000;
   let attempts = 0;
   let reachedStopTarget = false;
   let skippedInvalid = 0;
@@ -5025,9 +5025,9 @@ ui.algoProcDialogForm?.addEventListener("submit", (e) => {
   const objective = ui.algoProcObjective?.value === "plates" ? "plates" : "time";
 
   if (runMode === "fixed") {
-    const iterations = Math.max(1, Math.min(100000, Math.round(Number(ui.algoProcIterations?.value) || 0)));
+    const iterations = Math.max(1, Math.min(1000000, Math.round(Number(ui.algoProcIterations?.value) || 0)));
     if (!Number.isFinite(iterations) || iterations <= 0) {
-      _setAlgoProcDialogError("Le nombre d'itérations doit être un entier entre 1 et 100000.");
+      _setAlgoProcDialogError("Le nombre d'itérations doit être un entier entre 1 et 1000000.");
       return;
     }
     _closeAlgoProcDialog();
