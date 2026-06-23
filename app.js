@@ -315,6 +315,18 @@ const ui = {
   algoRandomSeedBtn: document.getElementById("algo-random-seed"),
   algoProcBtn: document.getElementById("algo-proc-successive"),
   algoProcResults: document.getElementById("algo-proc-results"),
+  algoProcDialogOverlay: document.getElementById("modal-algo-proc-overlay"),
+  algoProcDialogForm: document.getElementById("algo-proc-dialog-form"),
+  algoProcMode: document.getElementById("algo-proc-mode"),
+  algoProcObjective: document.getElementById("algo-proc-objective"),
+  algoProcIterations: document.getElementById("algo-proc-iterations"),
+  algoProcThreshold: document.getElementById("algo-proc-threshold"),
+  algoProcSeconds: document.getElementById("algo-proc-seconds"),
+  algoProcFixedGroup: document.getElementById("algo-proc-fixed-group"),
+  algoProcTargetGroup: document.getElementById("algo-proc-target-group"),
+  algoProcTargetHint: document.getElementById("algo-proc-target-hint"),
+  algoProcDialogError: document.getElementById("algo-proc-dialog-error"),
+  algoProcCancel: document.getElementById("algo-proc-cancel"),
   autoResult: document.getElementById("auto-result"),
   holesCount: document.getElementById("holes-count"),
   holesEmpty: document.getElementById("holes-empty"),
@@ -975,12 +987,16 @@ function renderPlan() {
               return;
             }
 
-            const minWc = Number(ui.plateMinWidth?.value);
-            const maxWc = Number(ui.plateMaxWidth?.value);
-            const minHc = Number(ui.plateMinHeight?.value);
-            const maxHc = Number(ui.plateMaxHeight?.value);
-            const minMc = Number(ui.plateMinMass?.value);
-            const maxMc = Number(ui.plateMaxMass?.value);
+            const _uiOrSurface = (uiVal, surfVal) => {
+              const n = Number(uiVal);
+              return Number.isFinite(n) ? n : Number(surfVal);
+            };
+            const minWc = _uiOrSurface(ui.plateMinWidth?.value, surf.plaqueMinWidth);
+            const maxWc = _uiOrSurface(ui.plateMaxWidth?.value, surf.plaqueMaxWidth);
+            const minHc = _uiOrSurface(ui.plateMinHeight?.value, surf.plaqueMinHeight);
+            const maxHc = _uiOrSurface(ui.plateMaxHeight?.value, surf.plaqueMaxHeight);
+            const minMc = _uiOrSurface(ui.plateMinMass?.value, surf.plaqueMinMass);
+            const maxMc = _uiOrSurface(ui.plateMaxMass?.value, surf.plaqueMaxMass);
             const t = Number(ac().surface.profondeur) || 0;
             const mass = (newW * newH * t * 1e-9) * 2500;
             const dimOk = Number.isFinite(minWc) && Number.isFinite(maxWc) && Number.isFinite(minHc) && Number.isFinite(maxHc)
@@ -3568,30 +3584,87 @@ function _computeAdaptiveGridLines(total, idealStep, polyVals, minDim, maxDim, s
  * Somme des longueurs d'aretes de peripherie des plaques (mm),
  * en comptant une arete commune une seule fois.
  */
-function _sumUniquePlaquePerimeterMm(plaques) {
-  const edgeSet = new Map(); // key -> length
-  const q = (v) => Math.round(v * 10); // 0.1 mm
+function _collectPlaqueEdgePieces(polys) {
+  const groups = new Map();
+  const q = (v) => Math.round((Number(v) || 0) * 10) / 10; // 0.1 mm
+  const qDir = (v) => Math.round((Number(v) || 0) * 1e6);
+  const eps = 1e-6;
 
-  const addEdge = (ax, ay, bx, by) => {
-    const x1 = q(ax), y1 = q(ay), x2 = q(bx), y2 = q(by);
-    if (x1 === x2 && y1 === y2) return;
-    const aFirst = x1 < x2 || (x1 === x2 && y1 <= y2);
-    const key = aFirst ? `${x1},${y1}|${x2},${y2}` : `${x2},${y2}|${x1},${y1}`;
-    if (!edgeSet.has(key)) edgeSet.set(key, Math.hypot(x2 - x1, y2 - y1) / 10);
+  const addEdge = (a, b) => {
+    const ax = Number(a?.x) || 0;
+    const ay = Number(a?.y) || 0;
+    const bx = Number(b?.x) || 0;
+    const by = Number(b?.y) || 0;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    if (len <= eps) return;
+
+    let ux = dx / len;
+    let uy = dy / len;
+    // Canonical orientation so colinear opposite edges share the same line key.
+    if (ux < -eps || (Math.abs(ux) <= eps && uy < 0)) {
+      ux = -ux;
+      uy = -uy;
+    }
+    const nx = -uy;
+    const ny = ux;
+    const c = ax * nx + ay * ny;
+    const t0 = ax * ux + ay * uy;
+    const t1 = bx * ux + by * uy;
+    const lo = Math.min(t0, t1);
+    const hi = Math.max(t0, t1);
+    if (hi - lo <= eps) return;
+
+    const key = `${qDir(ux)},${qDir(uy)}|${Math.round(q(c) * 10)}`;
+    if (!groups.has(key)) groups.set(key, { ux, uy, c, intervals: [] });
+    groups.get(key).intervals.push({ lo: q(lo), hi: q(hi) });
   };
 
-  for (const pl of plaques || []) {
-    const pts = Array.isArray(pl?.poly) ? pl.poly : [];
-    if (pts.length < 2) continue;
-    for (let i = 0; i < pts.length; i++) {
-      const a = pts[i], b = pts[(i + 1) % pts.length];
-      addEdge(a.x, a.y, b.x, b.y);
+  for (const poly of polys || []) {
+    if (!Array.isArray(poly) || poly.length < 2) continue;
+    for (let i = 0; i < poly.length; i++) {
+      addEdge(poly[i], poly[(i + 1) % poly.length]);
     }
   }
 
-  let total = 0;
-  edgeSet.forEach((len) => { total += len; });
-  return total;
+  const out = [];
+  for (const g of groups.values()) {
+    const breaks = [];
+    for (const iv of g.intervals) {
+      if (iv.hi - iv.lo <= eps) continue;
+      breaks.push(iv.lo, iv.hi);
+    }
+    const uniq = [...new Set(breaks)].sort((a, b) => a - b);
+    for (let i = 0; i < uniq.length - 1; i++) {
+      const lo = uniq[i];
+      const hi = uniq[i + 1];
+      if (hi - lo <= eps) continue;
+      const mid = (lo + hi) * 0.5;
+      let count = 0;
+      for (const iv of g.intervals) {
+        if (mid > iv.lo + eps && mid < iv.hi - eps) count++;
+      }
+      if (count <= 0) continue;
+      const nx = -g.uy;
+      const ny = g.ux;
+      out.push({
+        a: { x: g.ux * lo + nx * g.c, y: g.uy * lo + ny * g.c },
+        b: { x: g.ux * hi + nx * g.c, y: g.uy * hi + ny * g.c },
+        count,
+        lengthMm: hi - lo,
+      });
+    }
+  }
+
+  return out;
+}
+
+function _sumUniquePlaquePerimeterMm(plaques) {
+  const polys = (plaques || [])
+    .map((pl) => Array.isArray(pl?.poly) ? pl.poly : [])
+    .filter((poly) => poly.length >= 2);
+  return _collectPlaqueEdgePieces(polys).reduce((acc, seg) => acc + seg.lengthMm, 0);
 }
 
 function runAutoLayout(options = {}) {
@@ -3606,15 +3679,19 @@ function runAutoLayout(options = {}) {
     if (ui.algoWeightArea) ui.algoWeightArea.value = String(Math.round(Number(s.algoWeightArea ?? 50)));
     _algoUiSurfaceRef = s;
   }
-  const minW = Number(ov?.minW ?? ui.plateMinWidth?.value);
-  const maxW = Number(ov?.maxW ?? ui.plateMaxWidth?.value);
-  const minH = Number(ov?.minH ?? ui.plateMinHeight?.value);
-  const maxH = Number(ov?.maxH ?? ui.plateMaxHeight?.value);
-  const minT = Number(ov?.minT ?? ui.plateMinThickness?.value);
-  const maxT = Number(ov?.maxT ?? ui.plateMaxThickness?.value);
-  const minMass = Number(ov?.minMass ?? ui.plateMinMass?.value);
-  const maxMass = Number(ov?.maxMass ?? ui.plateMaxMass?.value);
-  const cornerDiameter = Number(ov?.cornerDiameter ?? ui.plateCornerDiameter?.value);
+  const _numOrSurface = (val, fallback) => {
+    const n = Number(val);
+    return Number.isFinite(n) ? n : Number(fallback);
+  };
+  const minW = _numOrSurface(ov?.minW ?? ui.plateMinWidth?.value, s.plaqueMinWidth);
+  const maxW = _numOrSurface(ov?.maxW ?? ui.plateMaxWidth?.value, s.plaqueMaxWidth);
+  const minH = _numOrSurface(ov?.minH ?? ui.plateMinHeight?.value, s.plaqueMinHeight);
+  const maxH = _numOrSurface(ov?.maxH ?? ui.plateMaxHeight?.value, s.plaqueMaxHeight);
+  const minT = _numOrSurface(ov?.minT ?? ui.plateMinThickness?.value, s.plaqueMinThickness);
+  const maxT = _numOrSurface(ov?.maxT ?? ui.plateMaxThickness?.value, s.plaqueMaxThickness);
+  const minMass = _numOrSurface(ov?.minMass ?? ui.plateMinMass?.value, s.plaqueMinMass);
+  const maxMass = _numOrSurface(ov?.maxMass ?? ui.plateMaxMass?.value, s.plaqueMaxMass);
+  const cornerDiameter = _numOrSurface(ov?.cornerDiameter ?? ui.plateCornerDiameter?.value, s.plaqueCornerDiameter);
   const algoWeightMass = Number(ui.algoWeightMass?.value ?? s.algoWeightMass ?? 50);
   const algoWeightSaw = Number(ui.algoWeightSaw?.value ?? s.algoWeightSaw ?? 35);
   const algoWeightHoles = Number(ui.algoWeightHoles?.value ?? s.algoWeightHoles ?? 35);
@@ -4480,20 +4557,42 @@ function runAutoLayout(options = {}) {
     rendState.tables[0] || null;
   const facteurRend = Math.max(0, Number(syntheseState.facteurCorrectif) || 100) / 100;
   const sousFaceHParM2 = Math.max(0, Number(syntheseState.sousFaceHParM2) || 0);
-  const sciageRateHPerMl = thickness < sciageSeuil ? sciageMurale : sciageCable;
-  const perimeterHours = (uniquePerimeterMm / 1000) * sciageRateHPerMl;
-  const carottageRateRaw = rendLookup(activeRendTable, cornerDiameter, s.maillageFerraillage || 'moyen', !!s.debouchantZ4);
+  const useMurale = thickness < sciageSeuil;
+  const sciageRate = useMurale ? sciageMurale : sciageCable;
+  const cutCount = _metreCollectSciageSegments(plaques).length;
+  const tManutentionPlaque = Math.max(0, Number(syntheseState.tManutentionPlaque) || 0);
+  const tManutentionPlaqueNonDebouchant = Math.max(0, Number(syntheseState.tManutentionPlaqueNonDebouchant) || 0);
+  const tInstallCableParTrait = Math.max(0, Number(syntheseState.tInstallCableParTrait) || 0);
+  const tInstallCableBlocParPlaque = Math.max(0, Number(syntheseState.tInstallCableBlocParPlaque) || 0);
+  const tInstallCableFondParPlaque = Math.max(0, Number(syntheseState.tInstallCableFondParPlaque) || 0);
+  const tInstallDisqueParTrait = Math.max(0, Number(syntheseState.tInstallDisqueParTrait) || 0);
+  const tInstallCarotteuseParCarotte = Math.max(0, Number(syntheseState.tInstallCarotteuseParCarotte) || 0);
+  const tRetraitCarotte = Math.max(0, Number(syntheseState.tRetraitCarotte) || 0);
+  const perimeterMl = uniquePerimeterMm / 1000;
+  const lateralAreaM2 = (uniquePerimeterMm * thickness) / 1e6;
+  const perimeterHours = useMurale ? (perimeterMl * sciageMurale) : (lateralAreaM2 * sciageCable);
+  const carottageRateRaw = rendLookup(activeRendTable, cornerDiameter, s.maillageFerraillage || 'moyen', !s.debouchantZ4);
   const carottageRateHPerM = carottageRateRaw != null ? (carottageRateRaw * facteurRend) : null;
   const totalCarottageDepthM = (holes.length * Math.max(0, thickness)) / 1000;
   const holesHours = carottageRateHPerM != null
     ? (totalCarottageDepthM * carottageRateHPerM)
     : (holes.length * carottageH);
+  const setupMuraleHours = useMurale ? (cutCount * tInstallDisqueParTrait) : 0;
+  const setupRainurageHours = useMurale ? 0 : (cutCount * tInstallCableParTrait);
+  const setupBlocHours = s.debouchantZ4 ? (plaques.length * tInstallCableBlocParPlaque) : 0;
+  const setupSawHours = setupMuraleHours + setupRainurageHours + setupBlocHours;
+  const manutentionBlocHours = s.debouchantZ4 ? (plaques.length * tManutentionPlaque) : 0;
+  const manutentionPlaquesHours = s.debouchantZ4 ? 0 : (plaques.length * tManutentionPlaqueNonDebouchant);
+  const manutentionHours = manutentionBlocHours + manutentionPlaquesHours;
+  const fondSetupHours = s.debouchantZ4 ? 0 : (plaques.length * tInstallCableFondParPlaque);
+  const setupCarotteuseHours = holes.length * tInstallCarotteuseParCarotte;
+  const retraitCarotteHours = holes.length * tRetraitCarotte;
   const carottageRateInfo = carottageRateHPerM != null
     ? `${(Math.round(carottageRateHPerM * 100) / 100).toFixed(2)} h/m (tableau, Ø${Math.round(cornerDiameter)} mm)`
     : `${(Math.round(carottageH * 100) / 100).toFixed(2)} h/u (fallback)`;
   const slabAreaMm2 = Math.abs(_polyArea(slabPoly));
   const sousFaceHours = s.debouchantZ4 ? 0 : ((slabAreaMm2 / 1e6) * sousFaceHParM2);
-  const chantierHours = perimeterHours + holesHours + sousFaceHours;
+  const chantierHours = perimeterHours + holesHours + sousFaceHours + setupSawHours + fondSetupHours + manutentionHours + setupCarotteuseHours + retraitCarotteHours;
   const nExcl = exclNormBase.length;
   const exclInfo = nExcl > 0 ? `<span>${nExcl}&nbsp;zone(s) interdite(s) soustraite(s)</span>` : "";
 
@@ -4506,11 +4605,23 @@ function runAutoLayout(options = {}) {
       uniquePerimeterMm,
       chantierHours,
       timeBreakdown: {
-        sciageRateHPerMl,
+        sciageRate,
+        useMurale,
         carottageRateHPerM,
+        cutCount,
         perimeterHours,
         holesHours,
         sousFaceHours,
+        setupSawHours,
+        setupMuraleHours,
+        setupRainurageHours,
+        setupBlocHours,
+        fondSetupHours,
+        manutentionHours,
+        manutentionBlocHours,
+        manutentionPlaquesHours,
+        setupCarotteuseHours,
+        retraitCarotteHours,
       },
       gridX: xLines.length - 1,
       gridY: yLines.length - 1,
@@ -4539,9 +4650,18 @@ function runAutoLayout(options = {}) {
       <span>Épaisseur plaque&nbsp;: ${Math.round(thickness)} mm</span>
       <span>Masse plaque&nbsp;: ${massInfo}</span>
       <span>Périphérie unique&nbsp;: ${uniquePerimeterInfo}</span>
-      <span>Temps sciage&nbsp;: ${(Math.round(perimeterHours * 10) / 10).toFixed(1)} h (${sciageRateHPerMl} h/ml)</span>
+      <span>Temps sciage&nbsp;: ${(Math.round(perimeterHours * 10) / 10).toFixed(1)} h (${sciageRate} ${useMurale ? 'h/ml' : 'h/m²'})</span>
+      <span>Install. scie murale&nbsp;: ${(Math.round(setupMuraleHours * 10) / 10).toFixed(1)} h (${useMurale ? cutCount : 0} trait(s))</span>
+      <span>Install. câble rainurage&nbsp;: ${(Math.round(setupRainurageHours * 10) / 10).toFixed(1)} h (${useMurale ? 0 : cutCount} trait(s))</span>
+      <span>Install. câble bloc&nbsp;: ${(Math.round(setupBlocHours * 10) / 10).toFixed(1)} h (${s.debouchantZ4 ? plaques.length : 0} plaque(s))</span>
+      <span>Install. câble borgne (fond, non débouchant uniquement)&nbsp;: ${(Math.round(fondSetupHours * 10) / 10).toFixed(1)} h</span>
+      <span>Manutention plaques (non débouchant)&nbsp;: ${(Math.round(manutentionPlaquesHours * 10) / 10).toFixed(1)} h</span>
+      <span>Manutention blocs (débouchant)&nbsp;: ${(Math.round(manutentionBlocHours * 10) / 10).toFixed(1)} h</span>
       <span>Temps carottages&nbsp;: ${(Math.round(holesHours * 10) / 10).toFixed(1)} h (${carottageRateInfo})</span>
-      <span>Temps sous-faces&nbsp;: ${(Math.round(sousFaceHours * 10) / 10).toFixed(1)} h</span>
+      <span>Install. carotteuse&nbsp;: ${(Math.round(setupCarotteuseHours * 10) / 10).toFixed(1)} h</span>
+      <span>Retrait carottes&nbsp;: ${(Math.round(retraitCarotteHours * 10) / 10).toFixed(1)} h</span>
+      <span>Manutention totale&nbsp;: ${(Math.round(manutentionHours * 10) / 10).toFixed(1)} h</span>
+      <span>Temps découpage borgne&nbsp;: ${(Math.round(sousFaceHours * 10) / 10).toFixed(1)} h</span>
       <span>Heures chantier estimées&nbsp;: ${(Math.round(chantierHours * 10) / 10).toFixed(1)} h</span>
       ${exclInfo}
     </div>
@@ -4555,6 +4675,7 @@ function runAutoLayout(options = {}) {
 
 let _autoDebounce = null;
 let _algoProcTopScenarios = [];
+let _algoProcRunning = false;
 ui.autoForm.addEventListener("input", () => {
   clearTimeout(_autoDebounce);
   _autoDebounce = setTimeout(runAutoLayout, 300);
@@ -4599,12 +4720,75 @@ ui.algoRandomSeedBtn?.addEventListener("click", () => {
   runAutoLayout();
 });
 
-ui.algoProcBtn?.addEventListener("click", () => {
-  const requested = Number(prompt("Combien d'itérations de génération procédurale lancer ?", "200"));
-  const iterations = Math.max(1, Math.min(5000, Math.round(requested || 0)));
-  if (!Number.isFinite(iterations) || iterations <= 0) return;
+function _syncAlgoProcDialogUi() {
+  if (!ui.algoProcMode || !ui.algoProcObjective) return;
+  const mode = ui.algoProcMode.value === "target" ? "target" : "fixed";
+  const objective = ui.algoProcObjective.value === "plates" ? "plates" : "time";
+  if (ui.algoProcFixedGroup) ui.algoProcFixedGroup.hidden = mode !== "fixed";
+  if (ui.algoProcTargetGroup) ui.algoProcTargetGroup.hidden = mode !== "target";
+  if (ui.algoProcTargetHint) {
+    ui.algoProcTargetHint.textContent = objective === "plates"
+      ? "Arrêt anticipé dès qu'un scénario atteint au plus X plaques, sinon arrêt à la fin du délai."
+      : "Arrêt anticipé dès qu'un scénario atteint au plus X heures, sinon arrêt à la fin du délai.";
+  }
+}
 
-  const s = ac().surface;
+function _setAlgoProcDialogError(msg = "") {
+  if (!ui.algoProcDialogError) return;
+  const txt = String(msg || "").trim();
+  ui.algoProcDialogError.textContent = txt;
+  ui.algoProcDialogError.hidden = txt.length === 0;
+}
+
+function _openAlgoProcDialog() {
+  _setAlgoProcDialogError("");
+  _syncAlgoProcDialogUi();
+  if (ui.algoProcDialogOverlay) ui.algoProcDialogOverlay.hidden = false;
+}
+
+function _closeAlgoProcDialog() {
+  if (ui.algoProcDialogOverlay) ui.algoProcDialogOverlay.hidden = true;
+  _setAlgoProcDialogError("");
+}
+
+async function _runProceduralGeneration(config = {}) {
+  if (_algoProcRunning) {
+    setStatus("Une génération procédurale est déjà en cours.", true);
+    return;
+  }
+  _algoProcRunning = true;
+
+  const runMode = config.runMode === "target" ? "target" : "fixed";
+  const objective = config.objective === "plates" ? "plates" : "time";
+
+  const iterationsTarget = Math.max(1, Math.min(100000, Math.round(Number(config.iterationsTarget) || 0)));
+  const stopThreshold = Number(config.stopThreshold);
+  const timeBudgetMs = Math.max(1000, Math.min(120000, Math.round(Number(config.timeBudgetMs) || 0)));
+
+  if (runMode === "fixed" && (!Number.isFinite(iterationsTarget) || iterationsTarget <= 0)) {
+    setStatus("Nombre d'itérations invalide.", true);
+    _algoProcRunning = false;
+    return;
+  }
+  if (runMode === "target" && (!Number.isFinite(stopThreshold) || stopThreshold <= 0 || !Number.isFinite(timeBudgetMs) || timeBudgetMs <= 0)) {
+    setStatus("Objectif de recherche invalide.", true);
+    _algoProcRunning = false;
+    return;
+  }
+
+  const sortScenario = (a, b) => {
+    if (objective === "plates") {
+      return (a.plaques - b.plaques)
+        || (a.heures - b.heures)
+        || (a.carottages - b.carottages)
+        || (a.perimetreM - b.perimetreM);
+    }
+    return (a.heures - b.heures)
+      || (a.plaques - b.plaques)
+      || (a.carottages - b.carottages)
+      || (a.perimetreM - b.perimetreM);
+  };
+
   const base = {
     minW: Number(ui.plateMinWidth?.value),
     maxW: Number(ui.plateMaxWidth?.value),
@@ -4622,79 +4806,160 @@ ui.algoProcBtn?.addEventListener("click", () => {
   const round1 = (v) => Math.round(v * 10) / 10;
 
   const top = [];
+  const startedAt = Date.now();
+  const hardCap = runMode === "fixed" ? iterationsTarget : 100000;
+  let attempts = 0;
+  let reachedStopTarget = false;
   let skippedInvalid = 0;
+  let recoveredByRotation = 0;
   let skippedUncovered = 0;
   let recoveredDeadZones = 0;
 
-  for (let i = 0; i < iterations; i++) {
-    const vMinW = round10(randIn(base.minW, base.maxW));
-    const vMaxW = round10(randIn(vMinW, base.maxW));
-    const vMinH = round10(randIn(base.minH, base.maxH));
-    const vMaxH = round10(randIn(vMinH, base.maxH));
-    const vMinMass = round1(randIn(base.minMass, base.maxMass));
-    const vMaxMass = round1(randIn(vMinMass, base.maxMass));
-    const seedX = Math.random();
-    const seedY = Math.random();
+  const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const objectiveLabel = objective === "plates" ? "plaques minimales" : "temps minimal";
+  const renderRunningInfo = () => {
+    if (!ui.algoProcResults) return;
+    const elapsedSec = (Date.now() - startedAt) / 1000;
+    const progressTxt = runMode === "fixed"
+      ? `${attempts}/${hardCap} itérations`
+      : `${attempts} itérations · ${elapsedSec.toFixed(1)} s / ${(timeBudgetMs / 1000).toFixed(1)} s`;
+    ui.algoProcResults.hidden = false;
+    ui.algoProcResults.innerHTML = `<p style="margin:0"><strong>Génération en cours...</strong> ${progressTxt} · ${top.length} scénario(x) retenu(s).</p>`;
+    setStatus(`Génération procédurale en cours (${progressTxt}, objectif ${objectiveLabel}).`);
+  };
 
-    const override = {
-      minW: vMinW,
-      maxW: vMaxW,
-      minH: vMinH,
-      maxH: vMaxH,
-      minMass: vMinMass,
-      maxMass: vMaxMass,
-      minT: base.minT,
-      maxT: base.maxT,
-      cornerDiameter: base.cornerDiameter,
-      seedX,
-      seedY,
-    };
+  _algoProcTopScenarios = [];
+  renderRunningInfo();
 
-    let sim = runAutoLayout({
-      silent: true,
-      override,
-    });
+  try {
+    let chunkOps = 0;
+    let lastUiTick = Date.now();
+    for (let i = 0; i < hardCap; i++) {
+      if (runMode === "target" && (Date.now() - startedAt) >= timeBudgetMs) break;
+      attempts++;
 
-    if (!sim) {
-      skippedInvalid++;
-      continue;
-    }
-    if (!sim.fullyCovered) {
-      const recovered = runAutoLayout({
+      const vMinW = round10(randIn(base.minW, base.maxW));
+      const vMaxW = round10(randIn(vMinW, base.maxW));
+      const vMinH = round10(randIn(base.minH, base.maxH));
+      const vMaxH = round10(randIn(vMinH, base.maxH));
+      const vMinMass = round1(randIn(base.minMass, base.maxMass));
+      const vMaxMass = round1(randIn(vMinMass, base.maxMass));
+      const seedX = Math.random();
+      const seedY = Math.random();
+
+      const override = {
+        minW: vMinW,
+        maxW: vMaxW,
+        minH: vMinH,
+        maxH: vMaxH,
+        minMass: vMinMass,
+        maxMass: vMaxMass,
+        minT: base.minT,
+        maxT: base.maxT,
+        cornerDiameter: base.cornerDiameter,
+        seedX,
+        seedY,
+      };
+      let effectiveOverride = override;
+      let appliedRotationDeg = 0;
+
+      let sim = runAutoLayout({
         silent: true,
-        deadZoneRetry: true,
         override,
       });
-      if (!recovered || !recovered.fullyCovered) {
-        skippedUncovered++;
-        continue;
+
+      if (!sim) {
+        const cx = seedX - 0.5;
+        const cy = seedY - 0.5;
+        for (let angleDeg = 1; angleDeg <= 359; angleDeg++) {
+          const a = angleDeg * Math.PI / 180;
+          const rx = Math.max(0, Math.min(1, 0.5 + cx * Math.cos(a) - cy * Math.sin(a)));
+          const ry = Math.max(0, Math.min(1, 0.5 + cx * Math.sin(a) + cy * Math.cos(a)));
+          const rotatedOverride = {
+            ...override,
+            seedX: rx,
+            seedY: ry,
+          };
+          const rotated = runAutoLayout({
+            silent: true,
+            override: rotatedOverride,
+          });
+          if (rotated) {
+            sim = rotated;
+            effectiveOverride = rotatedOverride;
+            appliedRotationDeg = angleDeg;
+            recoveredByRotation++;
+            break;
+          }
+        }
+        if (!sim) {
+          skippedInvalid++;
+          continue;
+        }
       }
-      sim = recovered;
-      recoveredDeadZones++;
+
+      if (!sim.fullyCovered) {
+        const recovered = runAutoLayout({
+          silent: true,
+          deadZoneRetry: true,
+          override: effectiveOverride,
+        });
+        if (!recovered || !recovered.fullyCovered) {
+          skippedUncovered++;
+          continue;
+        }
+        sim = recovered;
+        recoveredDeadZones++;
+      }
+
+      const scenario = {
+        id: i + 1,
+        heures: sim.chantierHours,
+        perimetreM: sim.uniquePerimeterMm / 1000,
+        carottages: sim.holes.length,
+        plaques: sim.plaques.length,
+        breakdown: sim.timeBreakdown,
+        constraints: sim.constraints,
+        weights: sim.weights,
+        seed: sim.seed,
+        rotationDeg: appliedRotationDeg,
+      };
+
+      top.push(scenario);
+      top.sort(sortScenario);
+      if (top.length > 10) top.length = 10;
+
+      if (runMode === "target") {
+        const metric = objective === "plates" ? scenario.plaques : scenario.heures;
+        if (metric <= stopThreshold + 1e-9) {
+          reachedStopTarget = true;
+          break;
+        }
+      }
+
+      chunkOps++;
+      const now = Date.now();
+      if (chunkOps >= 25 || (now - lastUiTick) >= 150) {
+        renderRunningInfo();
+        chunkOps = 0;
+        lastUiTick = now;
+        await yieldToBrowser();
+      }
     }
-
-    const scenario = {
-      id: i + 1,
-      heures: sim.chantierHours,
-      perimetreM: sim.uniquePerimeterMm / 1000,
-      carottages: sim.holes.length,
-      plaques: sim.plaques.length,
-      breakdown: sim.timeBreakdown,
-      constraints: sim.constraints,
-      weights: sim.weights,
-      seed: sim.seed,
-    };
-
-    top.push(scenario);
-    top.sort((a, b) => a.heures - b.heures);
-    if (top.length > 10) top.length = 10;
+  } finally {
+    _algoProcRunning = false;
   }
 
   if (!ui.algoProcResults) return;
+  const elapsedMs = Date.now() - startedAt;
+  const modeSummary = runMode === "fixed"
+    ? `${attempts}/${iterationsTarget} itérations`
+    : `${attempts} itérations en ${(elapsedMs / 1000).toFixed(1)} s`;
+
   _algoProcTopScenarios = top.slice();
   if (!top.length) {
     ui.algoProcResults.hidden = false;
-    ui.algoProcResults.innerHTML = `<p style="margin:0">Aucun scénario valide et couvert trouvé sur ${iterations} itération(s).</p>`;
+    ui.algoProcResults.innerHTML = `<p style="margin:0">Aucun scénario valide et couvert trouvé (${modeSummary}).</p>`;
     setStatus("Génération procédurale successive : aucun scénario valide.", true);
     return;
   }
@@ -4708,23 +4973,86 @@ ui.algoProcBtn?.addEventListener("click", () => {
       <li data-scenario-idx="${idx}" style="padding:8px 10px;border:1px solid #d2dfeb;border-radius:8px;background:#f8fbff;cursor:pointer">
         <div style="font-weight:700;color:#1f3447">#${idx + 1} · ${(Math.round(sc.heures * 10) / 10).toFixed(1)} h</div>
         <div style="font-size:0.82rem;color:#405060">${sc.plaques} plaques · ${sc.carottages} carottages · ${(Math.round(sc.perimetreM * 10) / 10).toFixed(1)} m de périphérie</div>
-        <div style="font-size:0.8rem;color:#6b8099">Détail temps: sciage ${(Math.round((b.perimeterHours || 0) * 10) / 10).toFixed(1)} h (${(Math.round((b.sciageRateHPerMl || 0) * 100) / 100).toFixed(2)} h/ml) · carottages ${(Math.round((b.holesHours || 0) * 10) / 10).toFixed(1)} h (${b.carottageRateHPerM != null ? (Math.round(b.carottageRateHPerM * 100) / 100).toFixed(2) + ' h/m' : 'fallback h/u'}) · sous-faces ${(Math.round((b.sousFaceHours || 0) * 10) / 10).toFixed(1)} h</div>
+        <div style="font-size:0.8rem;color:#6b8099">Détail temps: sciage ${(Math.round((b.perimeterHours || 0) * 10) / 10).toFixed(1)} h (${(Math.round((b.sciageRate || 0) * 100) / 100).toFixed(2)} ${b.useMurale ? 'h/ml' : 'h/m²'}) · carottages ${(Math.round((b.holesHours || 0) * 10) / 10).toFixed(1)} h (${b.carottageRateHPerM != null ? (Math.round(b.carottageRateHPerM * 100) / 100).toFixed(2) + ' h/m' : 'fallback h/u'}) · découpage borgne ${(Math.round((b.sousFaceHours || 0) * 10) / 10).toFixed(1)} h</div>
         <div style="font-size:0.8rem;color:#6b8099">Bornes virtuelles: W ${Math.round(c.minW)}-${Math.round(c.maxW)} · H ${Math.round(c.minH)}-${Math.round(c.maxH)} · M ${c.minMass.toFixed(1)}-${c.maxMass.toFixed(1)} kg</div>
         <div style="font-size:0.8rem;color:#6b8099">Weights: masse ${Math.round(w.mass)} · sciage ${Math.round(w.saw)} · carottages ${Math.round(w.holes)} · surface ${Math.round(w.area)} · seed X ${sx}% Y ${sy}%</div>
       </li>`;
   }).join("");
 
   ui.algoProcResults.hidden = false;
+  const objectiveTitle = objective === "plates"
+    ? "Top 10 scénarios (nombre de plaques minimal)"
+    : "Top 10 scénarios (heures chantier minimales)";
   ui.algoProcResults.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
-      <strong>Top 10 scénarios (heures chantier minimales)</strong>
-      <span style="font-size:0.8rem;color:#6b8099">${iterations} itérations · ${skippedInvalid} invalides · ${skippedUncovered} non couvertes${recoveredDeadZones > 0 ? ` · ${recoveredDeadZones} récupérées (zones mortes)` : ''}</span>
+      <strong>${objectiveTitle}</strong>
+      <span style="font-size:0.8rem;color:#6b8099">${modeSummary}${runMode === "target" && reachedStopTarget ? ' · objectif atteint' : ''} · ${skippedInvalid} invalides · ${skippedUncovered} non couvertes${recoveredByRotation > 0 ? ` · ${recoveredByRotation} récupérées (rotation)` : ''}${recoveredDeadZones > 0 ? ` · ${recoveredDeadZones} récupérées (zones mortes)` : ''}</span>
     </div>
     <ol style="margin:0;padding-left:18px;display:grid;gap:8px">${lines}</ol>
     <p style="margin:8px 0 0;font-size:0.8rem;color:#6b8099">Cliquer un encart pour appliquer le scénario au viewer 2D/3D.</p>
   `;
 
-  setStatus(`Génération procédurale successive terminée : ${top.length} scénario(s) classé(s).`);
+  setStatus(`Génération procédurale successive terminée : ${top.length} scénario(s) classé(s) (${modeSummary}${runMode === "target" && reachedStopTarget ? ', objectif atteint' : ''}, objectif ${objective === "plates" ? "plaques minimales" : "temps minimal"}).`);
+}
+
+ui.algoProcBtn?.addEventListener("click", () => {
+  _openAlgoProcDialog();
+});
+
+ui.algoProcMode?.addEventListener("change", () => {
+  _syncAlgoProcDialogUi();
+  _setAlgoProcDialogError("");
+});
+
+ui.algoProcObjective?.addEventListener("change", () => {
+  _syncAlgoProcDialogUi();
+  _setAlgoProcDialogError("");
+});
+
+ui.algoProcCancel?.addEventListener("click", () => {
+  _closeAlgoProcDialog();
+});
+
+ui.algoProcDialogOverlay?.addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) _closeAlgoProcDialog();
+});
+
+ui.algoProcDialogForm?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  _setAlgoProcDialogError("");
+
+  const runMode = ui.algoProcMode?.value === "target" ? "target" : "fixed";
+  const objective = ui.algoProcObjective?.value === "plates" ? "plates" : "time";
+
+  if (runMode === "fixed") {
+    const iterations = Math.max(1, Math.min(100000, Math.round(Number(ui.algoProcIterations?.value) || 0)));
+    if (!Number.isFinite(iterations) || iterations <= 0) {
+      _setAlgoProcDialogError("Le nombre d'itérations doit être un entier entre 1 et 100000.");
+      return;
+    }
+    _closeAlgoProcDialog();
+    _runProceduralGeneration({ runMode, objective, iterationsTarget: iterations });
+    return;
+  }
+
+  const threshold = Number(ui.algoProcThreshold?.value);
+  const seconds = Math.max(1, Math.min(120, Math.round(Number(ui.algoProcSeconds?.value) || 0)));
+  if (!Number.isFinite(threshold) || threshold <= 0) {
+    _setAlgoProcDialogError("Le seuil cible doit être un nombre strictement positif.");
+    return;
+  }
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    _setAlgoProcDialogError("La durée max doit être comprise entre 1 et 120 secondes.");
+    return;
+  }
+
+  _closeAlgoProcDialog();
+  _runProceduralGeneration({
+    runMode,
+    objective,
+    stopThreshold: threshold,
+    timeBudgetMs: seconds * 1000,
+  });
 });
 
 ui.algoProcResults?.addEventListener("click", (e) => {
@@ -4734,23 +5062,8 @@ ui.algoProcResults?.addEventListener("click", (e) => {
   if (!Number.isInteger(idx) || idx < 0 || idx >= _algoProcTopScenarios.length) return;
   const sc = _algoProcTopScenarios[idx];
 
-  ui.plateMinWidth.value = String(Math.round(sc.constraints.minW));
-  ui.plateMaxWidth.value = String(Math.round(sc.constraints.maxW));
-  ui.plateMinHeight.value = String(Math.round(sc.constraints.minH));
-  ui.plateMaxHeight.value = String(Math.round(sc.constraints.maxH));
-  ui.plateMinMass.value = String(Math.round(sc.constraints.minMass * 10) / 10);
-  ui.plateMaxMass.value = String(Math.round(sc.constraints.maxMass * 10) / 10);
-
-  const s = ac().surface;
-  s.algoSeedX = sc.seed.x;
-  s.algoSeedY = sc.seed.y;
-  if (ui.algoWeightMass) ui.algoWeightMass.value = String(Math.round(sc.weights.mass));
-  if (ui.algoWeightSaw) ui.algoWeightSaw.value = String(Math.round(sc.weights.saw));
-  if (ui.algoWeightHoles) ui.algoWeightHoles.value = String(Math.round(sc.weights.holes));
-  if (ui.algoWeightArea) ui.algoWeightArea.value = String(Math.round(sc.weights.area));
-  _syncAlgoUiReadouts();
-
-  const applied = runAutoLayout({
+  const sim = runAutoLayout({
+    silent: true,
     deadZoneRetry: true,
     override: {
       minW: Number(sc.constraints.minW),
@@ -4766,11 +5079,19 @@ ui.algoProcResults?.addEventListener("click", (e) => {
       seedY: Number(sc.seed.y),
     },
   });
-  if (!applied) {
-    runAutoLayout();
+  if (!sim || !Array.isArray(sim.plaques) || !Array.isArray(sim.holes)) {
+    setStatus(`Impossible d'appliquer le scénario #${idx + 1} sur l'état courant.`, true);
+    return;
   }
+
+  const manualHoles = (ac().holes || []).filter(h => h?.manual === true);
+  ac().plaques = sim.plaques;
+  ac().holes = sim.holes.concat(manualHoles);
+
+  renderTable();
+  renderPlan();
   render3D();
-  setStatus(`Scénario #${idx + 1} appliqué.`);
+  setStatus(`Scénario #${idx + 1} appliqué (calepinage uniquement).`);
 });
 
 document.getElementById("btn-force-refresh")?.addEventListener("click", () => {
@@ -4857,6 +5178,7 @@ function _generateAcadScript(coucheIndex) {
   const c = state.couches[coucheIndex];
   if (!c) return '';
   const s = c.surface;
+  const mapY = (y) => _acadR1((Number(s?.height) || 0) - (Number(y) || 0));
   const lines = [];
 
   // Rectangle de la couche (origine 0,0 → largeur × hauteur)
@@ -4865,19 +5187,26 @@ function _generateAcadScript(coucheIndex) {
   // Rectangles des zones d'exclusion
   for (const z of (c.zones || [])) {
     if (z.type === 'exclusion') {
-      lines.push(`rectangle ${z.x},${z.y} ${z.x + z.w},${z.y + z.h}`);
+      const x1 = _acadR1(z.x);
+      const x2 = _acadR1((Number(z.x) || 0) + (Number(z.w) || 0));
+      const y1 = mapY(z.y);
+      const y2 = mapY((Number(z.y) || 0) + (Number(z.h) || 0));
+      lines.push(`rectangle ${x1},${y1} ${x2},${y2}`);
     }
   }
 
   // Cercles des carottages : centre + rayon
   for (const h of c.holes) {
     const r = Math.round(h.diameter / 2);
-    lines.push(`cercle ${h.x},${h.y} ${r}`);
+    lines.push(`cercle ${_acadR1(h.x)},${mapY(h.y)} ${r}`);
   }
 
   // Traits de coupe (table découpe) + périphérie géométrique réelle de la couche
   for (const seg of _acadSegmentsForCouche(c)) {
-    lines.push(_acadLineCmd(seg.a, seg.b));
+    lines.push(_acadLineCmd(
+      { x: _acadR1(seg.a.x), y: mapY(seg.a.y) },
+      { x: _acadR1(seg.b.x), y: mapY(seg.b.y) },
+    ));
   }
 
   return lines.join('\n');
@@ -6364,18 +6693,19 @@ function _drawEd_open() {
   _ensureBlocContourDefaults();
   const pts = state.bloc.contourPoints || [];
   if (pts.length >= 2) {
-    _drawEd.polylines.push({ pts: pts.map(p => ({ x: p.x, y: p.y })), closed: state.bloc.contourClosed });
+    // Conversion projet -> éditeur: Y projet (down) vers Y éditeur (up).
+    _drawEd.polylines.push({ pts: pts.map(p => ({ x: p.x, y: -p.y })), closed: state.bloc.contourClosed });
     if (!state.bloc.contourClosed) _drawEd.activePolyIdx = 0;
   }
   _drawEd.constructionLines = (state.bloc.constructionLines || []).map(l => ({
     x1: Number(l.x1) || 0,
-    y1: Number(l.y1) || 0,
+    y1: -(Number(l.y1) || 0),
     x2: Number(l.x2) || 0,
-    y2: Number(l.y2) || 0,
+    y2: -(Number(l.y2) || 0),
   }));
   _drawEd.constructionCircles = (state.bloc.constructionCircles || []).map(c => ({
     cx: Number(c.cx) || 0,
-    cy: Number(c.cy) || 0,
+    cy: -(Number(c.cy) || 0),
     r: Math.max(0, Number(c.r) || 0),
   }));
 
@@ -6422,14 +6752,15 @@ function _drawEd_fitView(bbox) {
   const spanY = Math.max(1, bbox.maxY - bbox.minY);
   _drawEd.zoom = Math.min((W - 2 * margin) / spanX, (H - 2 * margin) / spanY);
   _drawEd.panX = (W - spanX * _drawEd.zoom) / 2 - bbox.minX * _drawEd.zoom;
-  _drawEd.panY = (H - spanY * _drawEd.zoom) / 2 - bbox.minY * _drawEd.zoom;
+  // Axe Y CAO: positif vers le haut (écran SVG: positif vers le bas).
+  _drawEd.panY = (H - spanY * _drawEd.zoom) / 2 + bbox.maxY * _drawEd.zoom;
 }
 
 function _drawEd_toSvg(mmX, mmY) {
-  return { x: mmX * _drawEd.zoom + _drawEd.panX, y: mmY * _drawEd.zoom + _drawEd.panY };
+  return { x: mmX * _drawEd.zoom + _drawEd.panX, y: -mmY * _drawEd.zoom + _drawEd.panY };
 }
 function _drawEd_toMm(svgX, svgY) {
-  return { x: (svgX - _drawEd.panX) / _drawEd.zoom, y: (svgY - _drawEd.panY) / _drawEd.zoom };
+  return { x: (svgX - _drawEd.panX) / _drawEd.zoom, y: -((svgY - _drawEd.panY) / _drawEd.zoom) };
 }
 function _drawEd_svgCoords(e) {
   const r = document.getElementById('draw-svg')?.getBoundingClientRect();
@@ -6587,8 +6918,11 @@ function _drawEd_render() {
   const gs = _drawEd.gridStep;
   if (gs > 0 && _drawEd.zoom > 0) {
     const gG = _dNS('g'); gG.setAttribute('pointer-events', 'none');
-    const mmL = _drawEd_toMm(0, 0).x, mmR = _drawEd_toMm(W, 0).x;
-    const mmT = _drawEd_toMm(0, 0).y, mmB = _drawEd_toMm(0, H).y;
+    const mm0 = _drawEd_toMm(0, 0);
+    const mmW = _drawEd_toMm(W, 0);
+    const mmH = _drawEd_toMm(0, H);
+    const mmL = Math.min(mm0.x, mmW.x), mmR = Math.max(mm0.x, mmW.x);
+    const mmT = Math.max(mm0.y, mmH.y), mmB = Math.min(mm0.y, mmH.y);
     for (let gx = Math.floor(mmL / gs) * gs; gx <= mmR + gs; gx += gs) {
       const sx = _drawEd_toSvg(gx, 0).x;
       const isO = Math.abs(gx) < 1e-6;
@@ -6603,7 +6937,7 @@ function _drawEd_render() {
         t.textContent = Math.round(gx); gG.appendChild(t);
       }
     }
-    for (let gy = Math.floor(mmT / gs) * gs; gy <= mmB + gs; gy += gs) {
+    for (let gy = Math.floor(mmB / gs) * gs; gy <= mmT + gs; gy += gs) {
       const sy = _drawEd_toSvg(0, gy).y;
       const isO = Math.abs(gy) < 1e-6;
       const l = _dNS('line');
@@ -7083,7 +7417,8 @@ function _drawEd_apply() {
     poly = _drawEd.polylines.find(pl => pl.closed && pl.pts.length >= 3);
     if (!poly) return;
   }
-  const pts = poly.pts;
+  // Conversion éditeur -> projet: Y éditeur (up) vers Y projet (down).
+  const pts = poly.pts.map(p => ({ x: p.x, y: -p.y }));
   const bb = {
     minX: Math.min(...pts.map(p => p.x)), maxX: Math.max(...pts.map(p => p.x)),
     minY: Math.min(...pts.map(p => p.y)), maxY: Math.max(...pts.map(p => p.y)),
@@ -7095,13 +7430,13 @@ function _drawEd_apply() {
   state.bloc.contourClosed = true; state.bloc.contourSource = 'drawn';
   state.bloc.constructionLines = _drawEd.constructionLines.map((l) => ({
     x1: Math.round((l.x1 - bb.minX) * 10) / 10,
-    y1: Math.round((l.y1 - bb.minY) * 10) / 10,
+    y1: Math.round(((-l.y1) - bb.minY) * 10) / 10,
     x2: Math.round((l.x2 - bb.minX) * 10) / 10,
-    y2: Math.round((l.y2 - bb.minY) * 10) / 10,
+    y2: Math.round(((-l.y2) - bb.minY) * 10) / 10,
   }));
   state.bloc.constructionCircles = _drawEd.constructionCircles.map((c) => ({
     cx: Math.round((c.cx - bb.minX) * 10) / 10,
-    cy: Math.round((c.cy - bb.minY) * 10) / 10,
+    cy: Math.round(((-c.cy) - bb.minY) * 10) / 10,
     r: Math.max(0, Math.round(c.r * 10) / 10),
   }));
   state.couches.forEach(syncSalleSurfaceFromBloc);
@@ -8411,9 +8746,17 @@ const syntheseState = {
   tRepli:            1,      // h — repli carotteuse (1× / couche)
   tFaconnage:        0,      // h — façonnage
   tAutres:           0,      // h — autres temps unitaires
+  tManutentionPlaqueNonDebouchant: 1, // h/plaque
+  tManutentionPlaque: 2.5,       // h/plaque en mode debouchant (bloc, TR3)
+  tInstallCableParTrait: 3,      // h/trait scie a cable (rainurage)
+  tInstallCableBlocParPlaque: 6, // h/plaque en mode debouchant (bloc, TR3)
+  tInstallCableFondParPlaque: 5, // h/plaque en mode borgne (fond, TR4)
+  tInstallCarotteuseParCarotte: 0.5, // h/carotte
+  tInstallDisqueParTrait: 0.5,   // h/trait scie murale (disque)
+  tRetraitCarotte: 0.5,          // h/carotte
   sciageEpaisseurSeuilMm: 400, // mm — seuil scie murale / scie a cable
   sciageMuraleHParMl: 2,       // h/ml si epaisseur < seuil
-  sciageCableHParMl: 1,        // h/ml si epaisseur >= seuil
+  sciageCableHParMl: 0.74,     // h/m2 si epaisseur >= seuil (1 / 1.36 m2/h)
   carottageHUnitaire: 1,       // h/unite
   sousFaceHParM2: 1,           // h/m2 si non debouchant Z4
   pdfLegalFooterText: DEFAULT_PDF_LEGAL_FOOTER,
@@ -8429,7 +8772,15 @@ function synthLoadFromLS() {
   } catch (_) {}
   if (syntheseState.sciageEpaisseurSeuilMm == null) syntheseState.sciageEpaisseurSeuilMm = 400;
   if (syntheseState.sciageMuraleHParMl == null) syntheseState.sciageMuraleHParMl = 2;
-  if (syntheseState.sciageCableHParMl == null) syntheseState.sciageCableHParMl = 1;
+  if (syntheseState.sciageCableHParMl == null) syntheseState.sciageCableHParMl = 0.74;
+  if (syntheseState.tManutentionPlaqueNonDebouchant == null) syntheseState.tManutentionPlaqueNonDebouchant = 1;
+  if (syntheseState.tManutentionPlaque == null) syntheseState.tManutentionPlaque = 2.5;
+  if (syntheseState.tInstallCableParTrait == null) syntheseState.tInstallCableParTrait = 3;
+  if (syntheseState.tInstallCableBlocParPlaque == null) syntheseState.tInstallCableBlocParPlaque = 6;
+  if (syntheseState.tInstallCableFondParPlaque == null) syntheseState.tInstallCableFondParPlaque = 5;
+  if (syntheseState.tInstallCarotteuseParCarotte == null) syntheseState.tInstallCarotteuseParCarotte = 0.5;
+  if (syntheseState.tInstallDisqueParTrait == null) syntheseState.tInstallDisqueParTrait = 0.5;
+  if (syntheseState.tRetraitCarotte == null) syntheseState.tRetraitCarotte = 0.5;
   if (syntheseState.carottageHUnitaire == null) syntheseState.carottageHUnitaire = 1;
   if (syntheseState.sousFaceHParM2 == null) syntheseState.sousFaceHParM2 = 1;
   if (syntheseState.pdfLegalFooterText == null) syntheseState.pdfLegalFooterText = DEFAULT_PDF_LEGAL_FOOTER;
@@ -8443,7 +8794,7 @@ function synthSaveToLS() {
 // Renvoie le rendement en h/m (interpolé entre les deux diamètres encadrants)
 function rendLookup(table, diameter, maillage, isZ4) {
   if (!table?.lignes?.length) return null;
-  const prefix = isZ4 ? 'Z4' : 'horsZ4';
+  const prefix = 'horsZ4';
   const colId  = `${prefix}_${maillage}`;
   const rows   = [...table.lignes].sort((a, b) => a.diametre - b.diametre);
   if (diameter <= rows[0].diametre)                  return rows[0][colId] ?? null;
@@ -8465,7 +8816,7 @@ function masseCarotte(diamMm, profMm) {
 
 // ── Formatage numérique sécurisé ─────────────────────────────────────────────
 function _sfmt(v, dec = 2) {
-  return (v == null || isNaN(v)) ? '—' : Number(v).toFixed(dec);
+  return (v == null || isNaN(v)) ? '—' : Number(v).toFixed(dec).replace('.', ',');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -8547,8 +8898,8 @@ function _computeCoucheH(couche) {
   const s = couche.surface;
   const activeTable = rendState.tables.find(t => t.id === p.rendTableId) || rendState.tables[0] || null;
   const fc = s.rendementForce ? (s.rendementForceVal || 5) : null;
-  const holes = couche.holes;
-  if (!holes.length) return 0;
+  const holes = Array.isArray(couche.holes) ? couche.holes : [];
+  const plaques = Array.isArray(couche.plaques) ? couche.plaques : [];
   let totalTpsBrut = 0, totalCount = 0;
   const byGroup = new Map();
   for (const hole of holes) {
@@ -8560,13 +8911,27 @@ function _computeCoucheH(couche) {
     const g = byGroup.get(key); g.count++; g.profTotale += prof;
   }
   for (const [, g] of byGroup) {
-    const rendRaw = rendLookup(activeTable, g.diam, s.maillageFerraillage || 'moyen', !!s.debouchantZ4);
+    const rendRaw = rendLookup(activeTable, g.diam, s.maillageFerraillage || 'moyen', !s.debouchantZ4);
     let rend = rendRaw != null ? rendRaw * (p.facteurCorrectif / 100) : null;
     if (g.rendOverride != null) rend = g.rendOverride;
     totalTpsBrut += rend != null ? (g.profTotale / 1000) * rend : 0;
     totalCount += g.count;
   }
-  return totalTpsBrut + p.tInstallation + p.tRepli + (p.tPause + p.tExtraction) * totalCount;
+  const cutCount = _metreCollectSciageSegments(plaques).length;
+  const thickness = Math.max(0, Number(s.profondeur) || 0);
+  const sciageSeuil = Math.max(1, Number(p.sciageEpaisseurSeuilMm) || 400);
+  const useMurale = thickness < sciageSeuil;
+  const manutentionH = s.debouchantZ4
+    ? (plaques.length * Math.max(0, Number(p.tManutentionPlaque) || 0))
+    : (plaques.length * Math.max(0, Number(p.tManutentionPlaqueNonDebouchant) || 0));
+  const installMuraleH = useMurale ? (cutCount * Math.max(0, Number(p.tInstallDisqueParTrait) || 0)) : 0;
+  const installRainurageH = useMurale ? 0 : (cutCount * Math.max(0, Number(p.tInstallCableParTrait) || 0));
+  const installBlocH = s.debouchantZ4 ? (plaques.length * Math.max(0, Number(p.tInstallCableBlocParPlaque) || 0)) : 0;
+  const installSawH = installMuraleH + installRainurageH + installBlocH;
+  const fondSetupH = s.debouchantZ4 ? 0 : (plaques.length * Math.max(0, Number(p.tInstallCableFondParPlaque) || 0));
+  const installCarotteuseH = totalCount * Math.max(0, Number(p.tInstallCarotteuseParCarotte) || 0);
+  const retraitCarotteH = totalCount * Math.max(0, Number(p.tRetraitCarotte) || 0);
+  return totalTpsBrut + manutentionH + installSawH + fondSetupH + installCarotteuseH + retraitCarotteH;
 }
 
 // ── Liste plate de toutes les tâches (couches + custom) ──────────────────────
@@ -9098,7 +9463,7 @@ function _metreDepthMm(hole, couche) {
 
 function _metreFmt(v, dec = 2) {
   if (!Number.isFinite(v)) return '—';
-  return Number(v).toFixed(dec);
+  return Number(v).toFixed(dec).replace('.', ',');
 }
 
 function _metreNaturalCompareText(a, b) {
@@ -9123,45 +9488,11 @@ function _metrePlaquePoly(pl) {
 }
 
 function _metreCollectSciageSegments(plaques) {
-  const edgeMap = new Map();
-  const q = (n) => Math.round((Number(n) || 0) * 10); // 0.1 mm
+  const polys = (plaques || [])
+    .map((pl) => _metrePlaquePoly(pl))
+    .filter((poly) => poly.length >= 3);
 
-  const addEdge = (a, b) => {
-    const aX = Number(a?.x) || 0;
-    const aY = Number(a?.y) || 0;
-    const bX = Number(b?.x) || 0;
-    const bY = Number(b?.y) || 0;
-    const aK = `${q(aX)},${q(aY)}`;
-    const bK = `${q(bX)},${q(bY)}`;
-    if (aK === bK) return;
-    const key = aK < bK ? `${aK}|${bK}` : `${bK}|${aK}`;
-    const rec = edgeMap.get(key);
-    if (rec) {
-      rec.count += 1;
-      return;
-    }
-    edgeMap.set(key, {
-      a: { x: aX, y: aY },
-      b: { x: bX, y: bY },
-      count: 1,
-    });
-  };
-
-  for (const pl of plaques || []) {
-    const poly = _metrePlaquePoly(pl);
-    if (poly.length < 3) continue;
-    for (let i = 0; i < poly.length; i++) {
-      addEdge(poly[i], poly[(i + 1) % poly.length]);
-    }
-  }
-
-  return Array.from(edgeMap.values())
-    .map((e) => ({
-      a: e.a,
-      b: e.b,
-      count: e.count,
-      lengthMm: Math.hypot(e.b.x - e.a.x, e.b.y - e.a.y),
-    }))
+  return _collectPlaqueEdgePieces(polys)
     .sort((u, v) => {
       const uy = Math.min(u.a.y, u.b.y);
       const vy = Math.min(v.a.y, v.b.y);
@@ -9324,18 +9655,87 @@ function _metreCarottageSchemaHtml(couche, rows) {
   const g = _metreSchemaGeom(couche);
   const { vbW, vbH, slabPath, project } = g;
   const clamp = (v, mn, mx) => Math.max(mn, Math.min(mx, v));
-  const circles = rows.map((r, i) => {
+  const holeMeta = rows.map((r, i) => {
     const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1));
     const c = project({ x: r.x, y: r.y });
     const rr = Math.max(3.5, (Math.max(1, Number(r.diam) || 1) * 0.5) * ((vbW - 32) / Math.max(1, Number(couche?.surface?.width) || 1)));
-    return `<circle class="metre-hole-shape metre-schema-item" data-metre-item-idx="${no}" cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${rr.toFixed(1)}" />`;
+    return { no, c, rr };
+  });
+
+  const circles = holeMeta.map((h) => {
+    return `<circle class="metre-hole-shape metre-schema-item" data-metre-item-idx="${h.no}" cx="${h.c.x.toFixed(1)}" cy="${h.c.y.toFixed(1)}" r="${h.rr.toFixed(1)}" />`;
   }).join('');
-  const labels = rows.map((r, i) => {
-    const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || (i + 1));
-    const c = project({ x: r.x, y: r.y });
-    const rr = Math.max(3.5, (Math.max(1, Number(r.diam) || 1) * 0.5) * ((vbW - 32) / Math.max(1, Number(couche?.surface?.width) || 1)));
-    const fs = clamp(rr * 0.95, 8, 14);
-    return `<text class="metre-schema-label metre-hole-label" x="${c.x.toFixed(1)}" y="${c.y.toFixed(1)}" font-size="${fs.toFixed(1)}">${no}</text>`;
+
+  const dirs = [
+    { dx: 1, dy: -1, score: 0 },
+    { dx: -1, dy: -1, score: 1 },
+    { dx: 1, dy: 1, score: 2 },
+    { dx: -1, dy: 1, score: 3 },
+  ];
+
+  const labels = holeMeta.map((h) => {
+    const noTxt = String(h.no);
+    const fs = clamp(h.rr * 0.82, 8, 13);
+    const leadGap = Math.max(4, fs * 0.7);
+    const labelRadius = h.rr + leadGap;
+    const textW = Math.max(fs * 0.65, noTxt.length * fs * 0.62);
+    const textH = fs * 1.05;
+    const pad = 6;
+
+    const tryDir = (dir) => {
+      const ax = h.c.x + (h.rr * 0.72 * dir.dx);
+      const ay = h.c.y + (h.rr * 0.72 * dir.dy);
+      const lx = h.c.x + (labelRadius * dir.dx);
+      const ly = h.c.y + (labelRadius * dir.dy);
+      const textAnchor = dir.dx > 0 ? 'start' : 'end';
+      const baseline = dir.dy < 0 ? 'alphabetic' : 'hanging';
+
+      const left = textAnchor === 'start' ? lx : (lx - textW);
+      const right = textAnchor === 'start' ? (lx + textW) : lx;
+      const top = baseline === 'alphabetic' ? (ly - textH) : ly;
+      const bottom = baseline === 'alphabetic' ? ly : (ly + textH);
+
+      const inBounds = left >= pad && right <= (vbW - pad) && top >= pad && bottom <= (vbH - pad);
+
+      // Evite toute intersection entre le texte et n'importe quel cercle.
+      const circleIntersectsTextBox = (circle) => {
+        const cx = circle.c.x;
+        const cy = circle.c.y;
+        const nearestX = Math.max(left, Math.min(cx, right));
+        const nearestY = Math.max(top, Math.min(cy, bottom));
+        const dx = cx - nearestX;
+        const dy = cy - nearestY;
+        const d = Math.hypot(dx, dy);
+        return d < (circle.rr + 1.2);
+      };
+      const clearOfCircles = !holeMeta.some(circleIntersectsTextBox);
+
+      return {
+        ok: inBounds && clearOfCircles,
+        rank: dir.score,
+        ax, ay, lx, ly,
+        textAnchor,
+        baseline,
+      };
+    };
+
+    const candidates = dirs.map(tryDir);
+    let chosen = candidates.find((c) => c.ok);
+    if (!chosen) {
+      // Fallback robuste: garder le haut-droite puis recadrer dans le viewBox.
+      const d = dirs[0];
+      const ax = h.c.x + (h.rr * 0.72 * d.dx);
+      const ay = h.c.y + (h.rr * 0.72 * d.dy);
+      let lx = h.c.x + (labelRadius * d.dx);
+      let ly = h.c.y + (labelRadius * d.dy);
+      const textAnchor = 'start';
+      const baseline = 'alphabetic';
+      lx = clamp(lx, pad, vbW - pad - textW);
+      ly = clamp(ly, pad + textH, vbH - pad);
+      chosen = { ax, ay, lx, ly, textAnchor, baseline, rank: 99, ok: false };
+    }
+
+    return `<g class="metre-hole-label-wrap"><line x1="${chosen.ax.toFixed(1)}" y1="${chosen.ay.toFixed(1)}" x2="${chosen.lx.toFixed(1)}" y2="${chosen.ly.toFixed(1)}" stroke="#2d4f73" stroke-width="0.9" /><text class="metre-schema-label metre-hole-label" x="${chosen.lx.toFixed(1)}" y="${chosen.ly.toFixed(1)}" text-anchor="${chosen.textAnchor}" dominant-baseline="${chosen.baseline}" font-size="${fs.toFixed(1)}">${noTxt}</text></g>`;
   }).join('');
 
   return `
@@ -9610,6 +10010,52 @@ async function exportMetreExcel() {
   const oldTab = metreState.activeTab;
   try {
     const couche = ac();
+    const s = couche?.surface || {};
+    const metreData = _computeMetreData(couche);
+    const matStats = _computeCoucheMaterialStats(couche);
+    const activeRendTable =
+      rendState.tables.find(t => t.id === syntheseState.rendTableId) ||
+      rendState.tables[0] || null;
+
+    const carotteVolumeM3 = metreData.holeRows.reduce((acc, r) => {
+      const dM = Math.max(0, Number(r?.diam) || 0) / 1000;
+      const hM = Math.max(0, Number(r?.depthMm) || 0) / 1000;
+      return acc + (Math.PI * dM * dM * 0.25 * hM);
+    }, 0);
+    const carotteVolumeL = carotteVolumeM3 * 1000;
+    const carotteMassKg = metreData.holeRows.reduce((acc, r) => {
+      const d = Math.max(0, Number(r?.diam) || 0);
+      const h = Math.max(0, Number(r?.depthMm) || 0);
+      return acc + masseCarotte(d, h);
+    }, 0);
+
+    const cableRainurageMl = metreData.useMurale ? 0 : metreData.uniquePerimeterMl;
+    const cableRainurageM2Eq = cableRainurageMl;
+    const cableFondM2 = s.debouchantZ4 ? 0 : metreData.bottomAreaM2;
+    const cableTotalM2Dechets = cableRainurageM2Eq + cableFondM2;
+    const disqueMuraleMl = metreData.useMurale ? metreData.uniquePerimeterMl : 0;
+
+    const dechetBetonM3 = carotteVolumeM3;
+    const dechetPoussiereSecheM3 = cableTotalM2Dechets * 0.01;
+    const dechetPoussiereHumideM3 = (carotteVolumeM3 * 1.25) + (disqueMuraleMl * 0.01 * 0.45);
+    const dechetBetonL = dechetBetonM3 * 1000;
+    const dechetPoussiereSecheL = dechetPoussiereSecheM3 * 1000;
+    const dechetPoussiereHumideL = dechetPoussiereHumideM3 * 1000;
+    const futCapL = 200;
+    const futBetonU = Math.ceil(dechetBetonL / futCapL);
+    const futPoussiereSecheU = Math.ceil(dechetPoussiereSecheL / futCapL);
+    const futPoussiereHumideU = Math.ceil(dechetPoussiereHumideL / futCapL);
+
+    const sciageProdH = metreData.useMurale
+      ? (metreData.uniquePerimeterMl * metreData.rateMurale)
+      : (metreData.lateralAreaM2 * metreData.rateCable);
+    const decoupageBorgneH = (couche?.surface?.debouchantZ4 ? 0 : metreData.bottomAreaM2 * Math.max(0, Number(syntheseState.sousFaceHParM2) || 0));
+    const tempsTotalEstimeH = sciageProdH + metreData.totalSawInstallH + metreData.totalFondInstallH + metreData.totalPlaqueManutentionH + metreData.totalCarottageHTotal + decoupageBorgneH;
+
+    const gabaritTxt = (s.nature === 'circulaire')
+      ? `Circulaire Ø ${_metreFmt(Math.max(0, Number(s.diametre) || 0), 0)} mm`
+      : `${_metreFmt(Math.max(0, Number(s.width) || 0), 0)} x ${_metreFmt(Math.max(0, Number(s.height) || 0), 0)} mm`;
+
     const workbook = new excelNs.Workbook();
     workbook.creator = 'Nuvia Structure';
     workbook.created = new Date();
@@ -9662,6 +10108,30 @@ async function exportMetreExcel() {
         bottom: { style: 'thin', color: { argb: 'FFB9C7D6' } },
         right: { style: 'thin', color: { argb: 'FFB9C7D6' } },
       };
+    };
+
+    const addKeyValueSheet = (sheetTitle, rows) => {
+      const ws = workbook.addWorksheet(makeUniqueSheetName(sheetTitle, 1, workbook.worksheets.length + 1));
+      ws.views = [{ state: 'frozen', ySplit: 2 }];
+      ws.getCell(1, 1).value = sheetTitle;
+      ws.getCell(1, 1).font = { bold: true, size: 12, color: { argb: 'FF1F3447' } };
+      ws.mergeCells(1, 1, 1, 2);
+
+      ws.getCell(2, 1).value = 'Indicateur';
+      ws.getCell(2, 2).value = 'Valeur';
+      applyHeaderStyle(ws.getCell(2, 1));
+      applyHeaderStyle(ws.getCell(2, 2));
+
+      let rowNo = 3;
+      rows.forEach((r) => {
+        ws.getCell(rowNo, 1).value = String(r[0] ?? '');
+        ws.getCell(rowNo, 2).value = String(r[1] ?? '');
+        applyBodyStyle(ws.getCell(rowNo, 1));
+        applyBodyStyle(ws.getCell(rowNo, 2));
+        rowNo += 1;
+      });
+
+      ws.columns = [{ width: 58 }, { width: 44 }];
     };
 
     let sheetCounter = 0;
@@ -9733,6 +10203,81 @@ async function exportMetreExcel() {
       }
     }
 
+    addKeyValueSheet('Hypotheses prises et contraintes', [
+      ['Entite analysee', String(couche?.label || 'Couche active')],
+      ['Nature de surface', String(s.nature || 'salle')],
+      ['Gabarit max', gabaritTxt],
+      ['Profondeur activee (mm)', _metreFmt(Math.max(0, Number(metreData.thicknessActive) || 0), 0)],
+      ['Profondeur non activee (mm)', _metreFmt(Math.max(0, Number(metreData.thicknessInactive) || 0), 0)],
+      ['Dimensions plaque min (mm)', `${_metreFmt(Math.max(0, Number(s.plaqueMinWidth) || 0), 0)} x ${_metreFmt(Math.max(0, Number(s.plaqueMinHeight) || 0), 0)}`],
+      ['Dimensions plaque max (mm)', `${_metreFmt(Math.max(0, Number(s.plaqueMaxWidth) || 0), 0)} x ${_metreFmt(Math.max(0, Number(s.plaqueMaxHeight) || 0), 0)}`],
+      ['Epaisseur plaque min/max (mm)', `${_metreFmt(Math.max(0, Number(s.plaqueMinThickness) || 0), 0)} / ${_metreFmt(Math.max(0, Number(s.plaqueMaxThickness) || 0), 0)}`],
+      ['Masse plaque min/max (kg)', `${_metreFmt(Math.max(0, Number(s.plaqueMinMass) || 0), 1)} / ${_metreFmt(Math.max(0, Number(s.plaqueMaxMass) || 0), 1)}`],
+      ['Diametre carottage reference (mm)', _metreFmt(Math.max(0, Number(s.plaqueCornerDiameter) || 0), 0)],
+      ['Maillage', String(s.maillageFerraillage || 'moyen')],
+      ['Debouchant', s.debouchantZ4 ? 'Oui' : 'Non'],
+      ['Tableau rendement actif', String(activeRendTable?.nom || 'Aucun')],
+      ['Facteur correctif rendement (%)', _metreFmt(Math.max(0, Number(syntheseState.facteurCorrectif) || 0), 0)],
+      ['Temps manutention plaques non debouchant (h/plaque)', _metreFmt(Math.max(0, Number(syntheseState.tManutentionPlaqueNonDebouchant) || 0), 2)],
+      ['Temps manutention bloc debouchant (h/plaque)', _metreFmt(Math.max(0, Number(syntheseState.tManutentionPlaque) || 0), 2)],
+      ['Temps install. scie cable rainurage (h/trait)', _metreFmt(Math.max(0, Number(syntheseState.tInstallCableParTrait) || 0), 2)],
+      ['Temps install. scie cable bloc (h/plaque)', _metreFmt(Math.max(0, Number(syntheseState.tInstallCableBlocParPlaque) || 0), 2)],
+      ['Temps install. scie cable fond (non debouchant uniquement) (h/plaque)', _metreFmt(Math.max(0, Number(syntheseState.tInstallCableFondParPlaque) || 0), 2)],
+      ['Temps install. scie disque (h/trait)', _metreFmt(Math.max(0, Number(syntheseState.tInstallDisqueParTrait) || 0), 2)],
+      ['Temps install. carotteuse (h/carotte)', _metreFmt(Math.max(0, Number(syntheseState.tInstallCarotteuseParCarotte) || 0), 2)],
+      ['Temps retrait carotte (h/carotte)', _metreFmt(Math.max(0, Number(syntheseState.tRetraitCarotte) || 0), 2)],
+      ['Taux decoupage borgne (h/m2)', _metreFmt(Math.max(0, Number(syntheseState.sousFaceHParM2) || 0), 2)],
+      ['Dechets - equivalence cable', 'X m2 de sciage au cable = X ml de cable'],
+      ['Dechets - volume beton', 'Volume total carottes'],
+      ['Dechets - volume poussiere seche', 'm2 sciage cable (rainurage ou fond) x 0.01'],
+      ['Dechets - volume poussiere humide', '(Volume total carottes x 1.25) + (ml decoupe disque/mural x 0.01 x 0.45)'],
+      ['Dechets - conditionnement', 'Futs de 200 L, differencies par type de dechet'],
+    ]);
+
+    addKeyValueSheet('Recap masses, volumes, temps et quantites', [
+      ['Nombre de blocs/plaques', String(metreData.plaquesCount)],
+      ['Nombre de carottages', String(metreData.holeRows.length)],
+      ['Volume total carottes (m3)', _metreFmt(carotteVolumeM3, 4)],
+      ['Volume total carottes (L)', _metreFmt(carotteVolumeL, 1)],
+      ['Masse totale carottes (kg)', _metreFmt(carotteMassKg, 1)],
+      ['Masse carottage reelle (kg, union)', _metreFmt(matStats.removedMassKg, 1)],
+      ['Volume dechet beton (m3)', _metreFmt(dechetBetonM3, 4)],
+      ['Volume dechet beton (L)', _metreFmt(dechetBetonL, 1)],
+      ['Futs beton 200 L (u)', String(futBetonU)],
+      ['Volume poussiere seche (m3)', _metreFmt(dechetPoussiereSecheM3, 4)],
+      ['Volume poussiere seche (L)', _metreFmt(dechetPoussiereSecheL, 1)],
+      ['Futs poussiere seche 200 L (u)', String(futPoussiereSecheU)],
+      ['Volume poussiere humide (m3)', _metreFmt(dechetPoussiereHumideM3, 4)],
+      ['Volume poussiere humide (L)', _metreFmt(dechetPoussiereHumideL, 1)],
+      ['Futs poussiere humide 200 L (u)', String(futPoussiereHumideU)],
+      ['Temps sciage productif (h)', _metreFmt(sciageProdH, 2)],
+      ['Temps installation sciage (h)', _metreFmt(metreData.totalSawInstallH, 2)],
+      ['Temps installation cable fond (non debouchant uniquement) (h)', _metreFmt(metreData.totalFondInstallH, 2)],
+      ['Temps manutention plaques non debouchant (h)', _metreFmt(metreData.totalPlaqueManutentionNonDebouchantH, 2)],
+      ['Temps manutention blocs debouchants (h)', _metreFmt(metreData.totalPlaqueManutentionDebouchantH, 2)],
+      ['Temps manutention total (h)', _metreFmt(metreData.totalPlaqueManutentionH, 2)],
+      ['Temps carottages total (h)', _metreFmt(metreData.totalCarottageHTotal, 2)],
+      ['Temps decoupage borgne (h)', _metreFmt(decoupageBorgneH, 2)],
+      ['Temps global estime (h)', _metreFmt(tempsTotalEstimeH, 2)],
+    ]);
+
+    addKeyValueSheet('Dechets (beton, poussieres seches et humides)', [
+      ['Regle de conversion cable', 'X m2 de sciage au cable = X ml de cable'],
+      ['Ml cable rainurage retenus pour dechets', _metreFmt(cableRainurageMl, 2)],
+      ['M2 cable rainurage retenus pour dechets (equiv. 1:1)', _metreFmt(cableRainurageM2Eq, 2)],
+      ['M2 cable fond borgne retenus pour dechets', _metreFmt(cableFondM2, 2)],
+      ['M2 total sciage cable retenus pour dechets', _metreFmt(cableTotalM2Dechets, 2)],
+      ['Ml total decoupe disque/mural utilises en dechets', _metreFmt(disqueMuraleMl, 2)],
+      ['Volume total carottes (m3)', _metreFmt(carotteVolumeM3, 4)],
+      ['Volume dechet beton (L)', _metreFmt(dechetBetonL, 1)],
+      ['Futs beton 200 L (u)', String(futBetonU)],
+      ['Volume poussiere seche (L)', _metreFmt(dechetPoussiereSecheL, 1)],
+      ['Futs poussiere seche 200 L (u)', String(futPoussiereSecheU)],
+      ['Volume poussiere humide (L)', _metreFmt(dechetPoussiereHumideL, 1)],
+      ['Futs poussiere humide 200 L (u)', String(futPoussiereHumideU)],
+      ['Capacite d\'un fut (L)', String(futCapL)],
+    ]);
+
     const buffer = await workbook.xlsx.writeBuffer();
     const safeLabel = String(couche?.label || 'couche').replace(/[^a-zA-Z0-9_-]+/g, '_');
     const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -9781,8 +10326,175 @@ async function exportMetrePdf() {
   try {
     const oldTab = metreState.activeTab;
     const couche = ac();
+    const s = couche?.surface || {};
+    const metreData = _computeMetreData(couche);
+    const matStats = _computeCoucheMaterialStats(couche);
     const logo = await _metreGetLogoDataUrl();
     const sections = [];
+
+    const activeRendTable =
+      rendState.tables.find(t => t.id === syntheseState.rendTableId) ||
+      rendState.tables[0] || null;
+
+    const carotteVolumeM3 = metreData.holeRows.reduce((acc, r) => {
+      const dM = Math.max(0, Number(r?.diam) || 0) / 1000;
+      const hM = Math.max(0, Number(r?.depthMm) || 0) / 1000;
+      return acc + (Math.PI * dM * dM * 0.25 * hM);
+    }, 0);
+    const carotteMassKg = metreData.holeRows.reduce((acc, r) => {
+      const d = Math.max(0, Number(r?.diam) || 0);
+      const h = Math.max(0, Number(r?.depthMm) || 0);
+      return acc + masseCarotte(d, h);
+    }, 0);
+    const carotteVolumeL = carotteVolumeM3 * 1000;
+
+    // Dechets: regles demandees
+    // 1 ml cable = 1 m2 de sciage cable (rainurage ou fond)
+    const cableRainurageMl = metreData.useMurale ? 0 : metreData.uniquePerimeterMl;
+    const cableRainurageM2Eq = cableRainurageMl;
+    const cableFondM2 = s.debouchantZ4 ? 0 : metreData.bottomAreaM2;
+    const cableTotalM2Dechets = cableRainurageM2Eq + cableFondM2;
+
+    const disqueMuraleMl = metreData.useMurale ? metreData.uniquePerimeterMl : 0;
+
+    const dechetBetonM3 = carotteVolumeM3;
+    const dechetPoussiereSecheM3 = cableTotalM2Dechets * 0.01;
+    const dechetPoussiereHumideM3 = (carotteVolumeM3 * 1.25) + (disqueMuraleMl * 0.01 * 0.45);
+
+    const dechetBetonL = dechetBetonM3 * 1000;
+    const dechetPoussiereSecheL = dechetPoussiereSecheM3 * 1000;
+    const dechetPoussiereHumideL = dechetPoussiereHumideM3 * 1000;
+
+    const futCapL = 200;
+    const futBetonU = Math.ceil(dechetBetonL / futCapL);
+    const futPoussiereSecheU = Math.ceil(dechetPoussiereSecheL / futCapL);
+    const futPoussiereHumideU = Math.ceil(dechetPoussiereHumideL / futCapL);
+
+    const sciageProdH = metreData.useMurale
+      ? (metreData.uniquePerimeterMl * metreData.rateMurale)
+      : (metreData.lateralAreaM2 * metreData.rateCable);
+    const sousFaceH = (couche?.surface?.debouchantZ4 ? 0 : metreData.bottomAreaM2 * Math.max(0, Number(syntheseState.sousFaceHParM2) || 0));
+    const tempsTotalEstimeH = sciageProdH + metreData.totalSawInstallH + metreData.totalFondInstallH + metreData.totalPlaqueManutentionH + metreData.totalCarottageHTotal + sousFaceH;
+
+    const gabaritTxt = (s.nature === 'circulaire')
+      ? `Circulaire Ø ${_metreFmt(Math.max(0, Number(s.diametre) || 0), 0)} mm`
+      : `${_metreFmt(Math.max(0, Number(s.width) || 0), 0)} x ${_metreFmt(Math.max(0, Number(s.height) || 0), 0)} mm`;
+
+    sections.push({
+      label: 'Hypotheses prises et contraintes',
+      notes: [],
+      schema: null,
+      tables: [
+        {
+          head: [['Parametre', 'Valeur']],
+          body: [
+            ['Entite analysee', String(couche?.label || 'Couche active')],
+            ['Nature de surface', String(s.nature || 'salle')],
+            ['Gabarit max', gabaritTxt],
+            ['Profondeur activee (mm)', _metreFmt(Math.max(0, Number(metreData.thicknessActive) || 0), 0)],
+            ['Profondeur non activee (mm)', _metreFmt(Math.max(0, Number(metreData.thicknessInactive) || 0), 0)],
+            ['Dimensions plaque min (mm)', `${_metreFmt(Math.max(0, Number(s.plaqueMinWidth) || 0), 0)} x ${_metreFmt(Math.max(0, Number(s.plaqueMinHeight) || 0), 0)}`],
+            ['Dimensions plaque max (mm)', `${_metreFmt(Math.max(0, Number(s.plaqueMaxWidth) || 0), 0)} x ${_metreFmt(Math.max(0, Number(s.plaqueMaxHeight) || 0), 0)}`],
+            ['Epaisseur plaque min/max (mm)', `${_metreFmt(Math.max(0, Number(s.plaqueMinThickness) || 0), 0)} / ${_metreFmt(Math.max(0, Number(s.plaqueMaxThickness) || 0), 0)}`],
+            ['Masse plaque min/max (kg)', `${_metreFmt(Math.max(0, Number(s.plaqueMinMass) || 0), 1)} / ${_metreFmt(Math.max(0, Number(s.plaqueMaxMass) || 0), 1)}`],
+            ['Diametre carottage reference (mm)', _metreFmt(Math.max(0, Number(s.plaqueCornerDiameter) || 0), 0)],
+            ['Maillage', String(s.maillageFerraillage || 'moyen')],
+            ['Debouchant', s.debouchantZ4 ? 'Oui' : 'Non'],
+            ['Tableau rendement actif', String(activeRendTable?.nom || 'Aucun')],
+            ['Facteur correctif rendement (%)', _metreFmt(Math.max(0, Number(syntheseState.facteurCorrectif) || 0), 0)],
+            ['Temps manutention plaques non debouchant (h/plaque)', _metreFmt(Math.max(0, Number(syntheseState.tManutentionPlaqueNonDebouchant) || 0), 2)],
+            ['Temps manutention bloc debouchant (h/plaque)', _metreFmt(Math.max(0, Number(syntheseState.tManutentionPlaque) || 0), 2)],
+            ['Temps install. scie cable rainurage (h/trait)', _metreFmt(Math.max(0, Number(syntheseState.tInstallCableParTrait) || 0), 2)],
+            ['Temps install. scie cable bloc (h/plaque)', _metreFmt(Math.max(0, Number(syntheseState.tInstallCableBlocParPlaque) || 0), 2)],
+            ['Temps install. scie cable fond (non debouchant uniquement) (h/plaque)', _metreFmt(Math.max(0, Number(syntheseState.tInstallCableFondParPlaque) || 0), 2)],
+            ['Temps install. scie disque (h/trait)', _metreFmt(Math.max(0, Number(syntheseState.tInstallDisqueParTrait) || 0), 2)],
+            ['Temps install. carotteuse (h/carotte)', _metreFmt(Math.max(0, Number(syntheseState.tInstallCarotteuseParCarotte) || 0), 2)],
+            ['Temps retrait carotte (h/carotte)', _metreFmt(Math.max(0, Number(syntheseState.tRetraitCarotte) || 0), 2)],
+            ['Taux decoupage borgne (h/m2)', _metreFmt(Math.max(0, Number(syntheseState.sousFaceHParM2) || 0), 2)],
+            ['Dechets - equivalence cable', '1 ml de cable = 1 m2 de sciage cable (rainurage ou fond)'],
+            ['Dechets - volume beton', 'Volume total carottes'],
+            ['Dechets - volume poussiere seche', 'm2 sciage cable (rainurage ou fond) x 0.01'],
+            ['Dechets - volume poussiere humide', '(Volume total carottes x 1.25) + (ml decoupe disque/mural x 0.01 x 0.45)'],
+            ['Dechets - conditionnement', 'Futs de 200 L, differencies par type de dechet'],
+          ],
+          foot: [],
+        }
+      ],
+    });
+
+    sections.push({
+      label: 'Recap masses, volumes, temps et quantites',
+      notes: [],
+      schema: null,
+      tables: [
+        {
+          head: [['Indicateur', 'Valeur']],
+          body: [
+            ['Nombre de blocs/plaques', String(metreData.plaquesCount)],
+            ['Nombre de carottages', String(metreData.holeRows.length)],
+            ['Volume total carottes (m3)', _metreFmt(carotteVolumeM3, 4)],
+            ['Volume total carottes (L)', _metreFmt(carotteVolumeL, 1)],
+            ['Masse totale carottes (kg)', _metreFmt(carotteMassKg, 1)],
+            ['Masse carottage reelle (kg, union)', _metreFmt(matStats.removedMassKg, 1)],
+            ['Volume dechet beton (m3)', _metreFmt(dechetBetonM3, 4)],
+            ['Volume dechet beton (L)', _metreFmt(dechetBetonL, 1)],
+            ['Futs beton 200 L (u)', String(futBetonU)],
+            ['Volume poussiere seche (m3)', _metreFmt(dechetPoussiereSecheM3, 4)],
+            ['Volume poussiere seche (L)', _metreFmt(dechetPoussiereSecheL, 1)],
+            ['Futs poussiere seche 200 L (u)', String(futPoussiereSecheU)],
+            ['Volume poussiere humide (m3)', _metreFmt(dechetPoussiereHumideM3, 4)],
+            ['Volume poussiere humide (L)', _metreFmt(dechetPoussiereHumideL, 1)],
+            ['Futs poussiere humide 200 L (u)', String(futPoussiereHumideU)],
+            ['Temps sciage productif (h)', _metreFmt(sciageProdH, 2)],
+            ['Temps installation sciage (h)', _metreFmt(metreData.totalSawInstallH, 2)],
+            ['Temps installation cable fond (non debouchant uniquement) (h)', _metreFmt(metreData.totalFondInstallH, 2)],
+            ['Temps manutention plaques non debouchant (h)', _metreFmt(metreData.totalPlaqueManutentionNonDebouchantH, 2)],
+            ['Temps manutention blocs debouchants (h)', _metreFmt(metreData.totalPlaqueManutentionDebouchantH, 2)],
+            ['Temps manutention total (h)', _metreFmt(metreData.totalPlaqueManutentionH, 2)],
+            ['Temps carottages total (h)', _metreFmt(metreData.totalCarottageHTotal, 2)],
+            ['Temps decoupage borgne (h)', _metreFmt(sousFaceH, 2)],
+            ['Temps global estime (h)', _metreFmt(tempsTotalEstimeH, 2)],
+          ],
+          foot: [],
+        }
+      ],
+    });
+
+    sections.push({
+      label: 'Dechets (beton, poussieres seches et humides)',
+      notes: [
+        `Production dechets beton: ${_metreFmt(dechetBetonL, 1)} L, soit ${futBetonU} fut(s) de 200 L.`,
+        `Production dechets poussieres seches: ${_metreFmt(dechetPoussiereSecheL, 1)} L, soit ${futPoussiereSecheU} fut(s) de 200 L.`,
+        `Production dechets poussieres humides: ${_metreFmt(dechetPoussiereHumideL, 1)} L, soit ${futPoussiereHumideU} fut(s) de 200 L.`,
+        `Cable retenu pour dechets: ${_metreFmt(cableRainurageMl, 2)} ml (equivalence appliquee: X m2 sciage cable = X ml cable).`,
+      ],
+      schema: null,
+      tables: [
+        {
+          head: [['Type de dechet', 'Formule appliquee', 'Volume (m3)', 'Volume (L)', 'Futs 200 L (u)']],
+          body: [
+            ['Beton', 'Volume total de carottes', _metreFmt(dechetBetonM3, 4), _metreFmt(dechetBetonL, 1), String(futBetonU)],
+            ['Poussiere seche', 'm2 sciage cable (rainurage ou fond) x 0.01', _metreFmt(dechetPoussiereSecheM3, 4), _metreFmt(dechetPoussiereSecheL, 1), String(futPoussiereSecheU)],
+            ['Poussiere humide', '(Volume carottes x 1.25) + (ml disque/mural x 0.01 x 0.45)', _metreFmt(dechetPoussiereHumideM3, 4), _metreFmt(dechetPoussiereHumideL, 1), String(futPoussiereHumideU)],
+          ],
+          foot: [],
+        },
+        {
+          head: [['Grandeur utilisee', 'Unite', 'Valeur']],
+          body: [
+            ['Regle de conversion cable', 'equivalence', 'X m2 de sciage au cable = X ml de cable'],
+            ['Ml cable rainurage retenus pour dechets', 'ml', _metreFmt(cableRainurageMl, 2)],
+            ['M2 cable rainurage retenus pour dechets (equiv. 1:1)', 'm2', _metreFmt(cableRainurageM2Eq, 2)],
+            ['M2 cable fond borgne retenus pour dechets', 'm2', _metreFmt(cableFondM2, 2)],
+            ['M2 total sciage cable retenus pour dechets', 'm2', _metreFmt(cableTotalM2Dechets, 2)],
+            ['Ml total decoupe disque/mural utilises en dechets', 'ml', _metreFmt(disqueMuraleMl, 2)],
+            ['Volume total carottes', 'm3', _metreFmt(carotteVolumeM3, 4)],
+            ['Capacite d\'un fut', 'L', String(futCapL)],
+          ],
+          foot: [],
+        },
+      ],
+    });
 
     for (const tab of METRE_PDF_TABS) {
       metreState.activeTab = tab.id;
@@ -9797,9 +10509,8 @@ async function exportMetrePdf() {
 
       const schemaSvg = content.querySelector('.metre-schema-wrap svg');
       const schema = await _metreSvgToPng(schemaSvg);
-      const notes = Array.from(content.querySelectorAll('p, h3')).map((el) => String(el.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
       const tables = Array.from(content.querySelectorAll('.metre-table')).map(_metreExtractTableData);
-      sections.push({ label: tab.label, notes, schema, tables });
+      sections.push({ label: tab.label, notes: [], schema, tables });
     }
 
     metreState.activeTab = oldTab;
@@ -10009,7 +10720,9 @@ function _computeMetreData(couche) {
       y: Math.max(0, Number(pl?.y) || 0),
       w,
       h,
-      epaisseur: Math.max(0, Number(pl?.epaisseur) || thickness),
+      // Les tableaux metré doivent refléter l'epaisseur effective de la couche,
+      // meme si un ancien champ plaque.epaisseur est encore present dans l'etat.
+      epaisseur: thickness,
       areaM2: areaMm2 / 1e6,
       massKg,
       type: pl?.isConstrained ? 'contrainte' : 'libre',
@@ -10051,6 +10764,14 @@ function _computeMetreData(couche) {
   const rateMurale = Math.max(0, Number(syntheseState.sciageMuraleHParMl) || 0);
   const rateCable = Math.max(0, Number(syntheseState.sciageCableHParMl) || 0);
   const useMurale = thickness < sciageSeuil;
+  const tManutentionPlaque = Math.max(0, Number(syntheseState.tManutentionPlaque) || 0);
+  const tManutentionPlaqueNonDebouchant = Math.max(0, Number(syntheseState.tManutentionPlaqueNonDebouchant) || 0);
+  const tInstallCableParTrait = Math.max(0, Number(syntheseState.tInstallCableParTrait) || 0);
+  const tInstallCableBlocParPlaque = Math.max(0, Number(syntheseState.tInstallCableBlocParPlaque) || 0);
+  const tInstallCableFondParPlaque = Math.max(0, Number(syntheseState.tInstallCableFondParPlaque) || 0);
+  const tInstallDisqueParTrait = Math.max(0, Number(syntheseState.tInstallDisqueParTrait) || 0);
+  const tInstallCarotteuseParCarotte = Math.max(0, Number(syntheseState.tInstallCarotteuseParCarotte) || 0);
+  const tRetraitCarotte = Math.max(0, Number(syntheseState.tRetraitCarotte) || 0);
 
   const activeRendTable =
     rendState.tables.find(t => t.id === syntheseState.rendTableId) ||
@@ -10070,11 +10791,14 @@ function _computeMetreData(couche) {
     const maillage = h?.maillageFerraillage || s.maillageFerraillage || 'moyen';
     const rateRaw = forcedRateHPerM != null
       ? forcedRateHPerM
-      : rendLookup(activeRendTable, diam, maillage, !!s.debouchantZ4);
+      : rendLookup(activeRendTable, diam, maillage, !s.debouchantZ4);
     const rateHPerM = forcedRateHPerM != null
       ? forcedRateHPerM
       : (rateRaw != null ? rateRaw * facteurRend : null);
     const indivH = rateHPerM != null ? ((depthMm / 1000) * rateHPerM) : fallbackHU;
+    const dM = diam / 1000;
+    const hM = Math.max(0, Number(depthMm) || 0) / 1000;
+    const indivMassDaN = Math.PI * (dM * dM) * 0.25 * hM * 2500;
     holeRows.push({
       idx: i + 1,
       label: String(h?.label || `C${i + 1}`),
@@ -10084,6 +10808,7 @@ function _computeMetreData(couche) {
       depthMm,
       maillage,
       indivH,
+      indivMassDaN,
       rateHPerM,
       source: h?.manual === true ? 'manuel' : 'auto',
     });
@@ -10093,12 +10818,18 @@ function _computeMetreData(couche) {
   holeRows.forEach((r, i) => { r.schemaNo = i + 1; });
 
   const totalCarottageH = holeRows.reduce((acc, r) => acc + r.indivH, 0);
-  const totalCarottageMassDaN = holeRows.reduce((acc, r) => {
-    const dM = Math.max(0, Number(r.diam) || 0) / 1000;
-    const hM = Math.max(0, Number(r.depthMm) || 0) / 1000;
-    const volM3 = Math.PI * (dM * dM) * 0.25 * hM;
-    return acc + (volM3 * 2500);
-  }, 0);
+  const totalCarottageMassDaN = holeRows.reduce((acc, r) => acc + (Number(r.indivMassDaN) || 0), 0);
+  const totalCarottageInstallH = holeRows.length * tInstallCarotteuseParCarotte;
+  const totalCarottageRetraitH = holeRows.length * tRetraitCarotte;
+  const totalCarottageHTotal = totalCarottageH + totalCarottageInstallH + totalCarottageRetraitH;
+  const totalMuraleInstallH = useMurale ? (cutRows.length * tInstallDisqueParTrait) : 0;
+  const totalRainurageInstallH = useMurale ? 0 : (cutRows.length * tInstallCableParTrait);
+  const totalBlocInstallH = s.debouchantZ4 ? (plaqueRows.length * tInstallCableBlocParPlaque) : 0;
+  const totalSawInstallH = totalMuraleInstallH + totalRainurageInstallH + totalBlocInstallH;
+  const totalPlaqueManutentionDebouchantH = s.debouchantZ4 ? (plaqueRows.length * tManutentionPlaque) : 0;
+  const totalPlaqueManutentionNonDebouchantH = s.debouchantZ4 ? 0 : (plaqueRows.length * tManutentionPlaqueNonDebouchant);
+  const totalPlaqueManutentionH = totalPlaqueManutentionDebouchantH + totalPlaqueManutentionNonDebouchantH;
+  const totalFondInstallH = s.debouchantZ4 ? 0 : (plaqueRows.length * tInstallCableFondParPlaque);
 
   return {
     plaquesCount: plaques.length,
@@ -10121,7 +10852,18 @@ function _computeMetreData(couche) {
     rateCable,
     holeRows,
     totalCarottageH,
+    totalCarottageInstallH,
+    totalCarottageRetraitH,
+    totalCarottageHTotal,
     totalCarottageMassDaN,
+    totalMuraleInstallH,
+    totalRainurageInstallH,
+    totalBlocInstallH,
+    totalSawInstallH,
+    totalPlaqueManutentionDebouchantH,
+    totalPlaqueManutentionNonDebouchantH,
+    totalPlaqueManutentionH,
+    totalFondInstallH,
   };
 }
 
@@ -10150,8 +10892,9 @@ function renderMetre() {
       const no = Math.max(1, Number(r?.schemaNo) || Number(r?.idx) || 1);
       const tH = isActive ? (r.lengthMl * rate) : 0;
       const surfM2 = (r.lengthMl * data.thickness) / 1000;
+      const tCableH = isActive ? (surfM2 * rate) : 0;
       const info = mode === 'm2'
-        ? `Trait n°${no} — ${r.type} — ${_metreFmt(surfM2, 3)} m² (${_metreFmt(r.lengthMl, 3)} ml) — temps individuel ${_metreFmt(tH, 3)} h — de (${_metreFmt(r.x1, 1)} ; ${_metreFmt(r.y1, 1)}) à (${_metreFmt(r.x2, 1)} ; ${_metreFmt(r.y2, 1)})`
+        ? `Trait n°${no} — ${r.type} — ${_metreFmt(surfM2, 3)} m² (${_metreFmt(r.lengthMl, 3)} ml) — temps individuel ${_metreFmt(tCableH, 3)} h — de (${_metreFmt(r.x1, 1)} ; ${_metreFmt(r.y1, 1)}) à (${_metreFmt(r.x2, 1)} ; ${_metreFmt(r.y2, 1)})`
         : `Trait n°${no} — ${r.type} — ${_metreFmt(r.lengthMl, 3)} ml — temps individuel ${_metreFmt(tH, 3)} h — de (${_metreFmt(r.x1, 1)} ; ${_metreFmt(r.y1, 1)}) à (${_metreFmt(r.x2, 1)} ; ${_metreFmt(r.y2, 1)})`;
       return `
         <tr data-metre-row-kind="periph" data-metre-item-idx="${no}" data-metre-info="${escAttr(info)}">
@@ -10165,7 +10908,7 @@ function renderMetre() {
             ? `<td style="text-align:right">${_metreFmt(surfM2, 3)}</td><td style="text-align:right">${_metreFmt(r.lengthMl, 3)}</td>`
             : `<td style="text-align:right">${_metreFmt(r.lengthMl, 3)}</td>`}
           <td style="text-align:center">1x</td>
-          <td style="text-align:right">${_metreFmt(tH, 3)}</td>
+          <td style="text-align:right">${_metreFmt(mode === 'm2' ? tCableH : tH, 3)}</td>
         </tr>
       `;
     }).join('');
@@ -10249,7 +10992,7 @@ function renderMetre() {
     const schema = _metreCarottageSchemaHtml(couche, data.holeRows);
     const rows = data.holeRows.map((r, i) => {
       const idx = Math.max(1, Number(r?.schemaNo) || (i + 1));
-      const info = `Carottage n°${idx} — ${r.label} — Ø ${Math.round(r.diam)} mm — temps individuel ${_metreFmt(r.indivH, 2)} h — (${_metreFmt(r.x, 1)} ; ${_metreFmt(r.y, 1)})`;
+      const info = `Carottage n°${idx} — ${r.label} — Ø ${Math.round(r.diam)} mm — temps individuel ${_metreFmt(r.indivH, 2)} h — masse individuelle ${_metreFmt(r.indivMassDaN, 1)} daN — (${_metreFmt(r.x, 1)} ; ${_metreFmt(r.y, 1)})`;
       return `
       <tr data-metre-row-kind="holes" data-metre-item-idx="${idx}" data-metre-info="${escAttr(info)}">
         <td style="text-align:right">${idx}</td>
@@ -10260,6 +11003,7 @@ function renderMetre() {
         <td>${Math.round(r.depthMm)}</td>
         <td>${esc(r.maillage)}</td>
         <td style="text-align:right">${_metreFmt(r.indivH, 2)}</td>
+        <td style="text-align:right">${_metreFmt(r.indivMassDaN, 1)}</td>
         <td>${esc(r.source)}</td>
       </tr>
     `;
@@ -10267,11 +11011,14 @@ function renderMetre() {
     tableHtml = `
       ${schema}
       <table class="metre-table">
-        <thead><tr><th>N°</th><th>Carottage</th><th>X (mm)</th><th>Y (mm)</th><th>Diamètre (mm)</th><th>Hauteur (mm)</th><th>Maillage</th><th>Temps individuel (h)</th><th>Origine</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:#6b8099">Aucun carottage.</td></tr>'}</tbody>
+        <thead><tr><th>N°</th><th>Carottage</th><th>X (mm)</th><th>Y (mm)</th><th>Diamètre (mm)</th><th>Hauteur (mm)</th><th>Maillage</th><th>Temps individuel (h)</th><th>Masse individuelle (daN)</th><th>Origine</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="10" style="text-align:center;color:#6b8099">Aucun carottage.</td></tr>'}</tbody>
         <tfoot>
-          <tr><th colspan="7" style="text-align:right">Total heures carottages</th><th style="text-align:right">${_metreFmt(data.totalCarottageH, 2)}</th><th></th></tr>
-          <tr><th colspan="7" style="text-align:right">Masse totale carottages (daN)</th><th style="text-align:right">${_metreFmt(data.totalCarottageMassDaN, 1)}</th><th></th></tr>
+          <tr><th colspan="8" style="text-align:right">Temps carottage brut</th><th style="text-align:right">${_metreFmt(data.totalCarottageH, 2)}</th><th></th></tr>
+          <tr><th colspan="8" style="text-align:right">Installation carotteuse</th><th style="text-align:right">${_metreFmt(data.totalCarottageInstallH, 2)}</th><th></th></tr>
+          <tr><th colspan="8" style="text-align:right">Retrait carottes</th><th style="text-align:right">${_metreFmt(data.totalCarottageRetraitH, 2)}</th><th></th></tr>
+          <tr><th colspan="8" style="text-align:right">Total heures carottages</th><th style="text-align:right">${_metreFmt(data.totalCarottageHTotal, 2)}</th><th></th></tr>
+          <tr><th colspan="8" style="text-align:right">Masse totale carottages (daN)</th><th style="text-align:right">${_metreFmt(data.totalCarottageMassDaN, 1)}</th><th></th></tr>
         </tfoot>
       </table>
     `;
@@ -10285,14 +11032,22 @@ function renderMetre() {
       `;
     } else {
       const ml = data.uniquePerimeterMl;
-      const tH = ml * data.rateMurale;
+      const prodMuraleH = ml * data.rateMurale;
+      const tH = prodMuraleH + data.totalMuraleInstallH + data.totalBlocInstallH;
       const schema = _metreSciageSchemaHtml(couche, 'periph', data.cutRows);
       const rows = sciageRowsHtml(data.rateMurale, true);
       tableHtml = `
         ${schema}
         <table class="metre-table">
           <thead><tr><th>Catégorie</th><th>Ml uniques</th><th>Taux (h/ml)</th><th>Temps total (h)</th></tr></thead>
-          <tbody><tr><td>Sciage scie murale (sans doublons)</td><td style="text-align:right">${_metreFmt(ml, 2)}</td><td style="text-align:right">${_metreFmt(data.rateMurale, 2)}</td><td style="text-align:right">${_metreFmt(tH, 2)}</td></tr></tbody>
+          <tbody>
+            <tr><td>Sciage scie murale (sans doublons)</td><td style="text-align:right">${_metreFmt(ml, 2)}</td><td style="text-align:right">${_metreFmt(data.rateMurale, 2)}</td><td style="text-align:right">${_metreFmt(prodMuraleH, 2)}</td></tr>
+            <tr><td>Installation scie au disque (par trait)</td><td style="text-align:right">${data.cutRows.length}</td><td style="text-align:right">${_metreFmt(Math.max(0, Number(syntheseState.tInstallDisqueParTrait) || 0), 2)}</td><td style="text-align:right">${_metreFmt(data.totalMuraleInstallH, 2)}</td></tr>
+            <tr><td>Installation scie à câble bloc (par plaque)</td><td style="text-align:right">${data.plaqueRows.length}</td><td style="text-align:right">${_metreFmt(Math.max(0, Number(syntheseState.tInstallCableBlocParPlaque) || 0), 2)}</td><td style="text-align:right">${_metreFmt(data.totalBlocInstallH, 2)}</td></tr>
+            <tr><td>Manutention plaques non débouchant (par plaque)</td><td style="text-align:right">${data.plaqueRows.length}</td><td style="text-align:right">${_metreFmt(Math.max(0, Number(syntheseState.tManutentionPlaqueNonDebouchant) || 0), 2)}</td><td style="text-align:right">${_metreFmt(data.totalPlaqueManutentionNonDebouchantH, 2)}</td></tr>
+            <tr><td>Manutention blocs débouchants (par plaque)</td><td style="text-align:right">${data.plaqueRows.length}</td><td style="text-align:right">${_metreFmt(Math.max(0, Number(syntheseState.tManutentionPlaque) || 0), 2)}</td><td style="text-align:right">${_metreFmt(data.totalPlaqueManutentionDebouchantH, 2)}</td></tr>
+            <tr><td><strong>Total murale</strong></td><td style="text-align:right">—</td><td style="text-align:right">—</td><td style="text-align:right"><strong>${_metreFmt(tH + data.totalPlaqueManutentionH, 2)}</strong></td></tr>
+          </tbody>
           <tfoot><tr><th style="text-align:right" colspan="1">Sous-total</th><th style="text-align:right">${_metreFmt(ml, 2)}</th><th colspan="2" style="text-align:left">ml total sciage murale</th></tr></tfoot>
         </table>
         <p style="margin:8px 0 0;color:#6b8099;font-size:0.82rem">Le linéaire est basé sur la périphérie unique des plaques (jonctions communes non comptées en double).</p>
@@ -10303,19 +11058,27 @@ function renderMetre() {
     if (data.useMurale) {
       tableHtml = `
         <table class="metre-table">
-          <thead><tr><th>Catégorie</th><th>Ml uniques</th><th>Surface latérale (m²)</th><th>Taux (h/ml)</th><th>Temps total (h)</th></tr></thead>
+          <thead><tr><th>Catégorie</th><th>Ml uniques</th><th>Surface latérale (m²)</th><th>Taux (h/m²)</th><th>Temps total (h)</th></tr></thead>
           <tbody><tr><td colspan="5" style="text-align:center;color:#6b8099">Aucune coupe pour cette catégorie (méthode non applicable avec l'épaisseur actuelle).</td></tr></tbody>
         </table>
       `;
     } else {
-      const tH = data.uniquePerimeterMl * data.rateCable;
+      const prodCableH = data.lateralAreaM2 * data.rateCable;
+      const tH = prodCableH + data.totalRainurageInstallH + data.totalBlocInstallH;
       const schema = _metreSciageSchemaHtml(couche, 'periph', data.cutRows);
       const rows = sciageRowsHtml(data.rateCable, true, 'm2');
       tableHtml = `
         ${schema}
         <table class="metre-table">
-          <thead><tr><th>Catégorie</th><th>Ml uniques</th><th>Surface latérale (m²)</th><th>Taux (h/ml)</th><th>Temps total (h)</th></tr></thead>
-          <tbody><tr><td>Sciage scie à câble en périphérie (sans doublons)</td><td style="text-align:right">${_metreFmt(data.uniquePerimeterMl, 2)}</td><td style="text-align:right">${_metreFmt(data.lateralAreaM2, 2)}</td><td style="text-align:right">${_metreFmt(data.rateCable, 2)}</td><td style="text-align:right">${_metreFmt(tH, 2)}</td></tr></tbody>
+          <thead><tr><th>Catégorie</th><th>Ml uniques</th><th>Surface latérale (m²)</th><th>Taux (h/m²)</th><th>Temps total (h)</th></tr></thead>
+          <tbody>
+            <tr><td>Sciage scie à câble en périphérie (sans doublons)</td><td style="text-align:right">${_metreFmt(data.uniquePerimeterMl, 2)}</td><td style="text-align:right">${_metreFmt(data.lateralAreaM2, 2)}</td><td style="text-align:right">${_metreFmt(data.rateCable, 2)}</td><td style="text-align:right">${_metreFmt(prodCableH, 2)}</td></tr>
+            <tr><td>Installation scie à câble rainurage (par trait)</td><td style="text-align:right">${data.cutRows.length}</td><td style="text-align:right">—</td><td style="text-align:right">${_metreFmt(Math.max(0, Number(syntheseState.tInstallCableParTrait) || 0), 2)}</td><td style="text-align:right">${_metreFmt(data.totalRainurageInstallH, 2)}</td></tr>
+            <tr><td>Installation scie à câble bloc (par plaque)</td><td style="text-align:right">${data.plaqueRows.length}</td><td style="text-align:right">—</td><td style="text-align:right">${_metreFmt(Math.max(0, Number(syntheseState.tInstallCableBlocParPlaque) || 0), 2)}</td><td style="text-align:right">${_metreFmt(data.totalBlocInstallH, 2)}</td></tr>
+            <tr><td>Manutention plaques non débouchant (par plaque)</td><td style="text-align:right">${data.plaqueRows.length}</td><td style="text-align:right">—</td><td style="text-align:right">${_metreFmt(Math.max(0, Number(syntheseState.tManutentionPlaqueNonDebouchant) || 0), 2)}</td><td style="text-align:right">${_metreFmt(data.totalPlaqueManutentionNonDebouchantH, 2)}</td></tr>
+            <tr><td>Manutention blocs débouchants (par plaque)</td><td style="text-align:right">${data.plaqueRows.length}</td><td style="text-align:right">—</td><td style="text-align:right">${_metreFmt(Math.max(0, Number(syntheseState.tManutentionPlaque) || 0), 2)}</td><td style="text-align:right">${_metreFmt(data.totalPlaqueManutentionDebouchantH, 2)}</td></tr>
+            <tr><td><strong>Total câble périphérie</strong></td><td style="text-align:right">—</td><td style="text-align:right">—</td><td style="text-align:right">—</td><td style="text-align:right"><strong>${_metreFmt(tH + data.totalPlaqueManutentionH, 2)}</strong></td></tr>
+          </tbody>
           <tfoot><tr><th style="text-align:right" colspan="2">Sous-total</th><th style="text-align:right">${_metreFmt(data.lateralAreaM2, 2)}</th><th colspan="2" style="text-align:left">m² sciage câble périphérie</th></tr></tfoot>
         </table>
         <p style="margin:8px 0 0;color:#6b8099;font-size:0.82rem">Surface latérale = périphérie unique × épaisseur couche.</p>
@@ -10331,7 +11094,11 @@ function renderMetre() {
       ${schema}
       <table class="metre-table">
         <thead><tr><th>Catégorie</th><th>Surface (m²)</th><th>Taux (h/m²)</th><th>Temps total (h)</th></tr></thead>
-        <tbody><tr><td>Sciage au câble borgne (surface plaques)</td><td style="text-align:right">${_metreFmt(data.bottomAreaM2, 2)}</td><td style="text-align:right">${_metreFmt(sfRate, 2)}</td><td style="text-align:right">${_metreFmt(sfH, 2)}</td></tr></tbody>
+        <tbody>
+          <tr><td>Sciage au câble borgne (surface plaques)</td><td style="text-align:right">${_metreFmt(data.bottomAreaM2, 2)}</td><td style="text-align:right">${_metreFmt(sfRate, 2)}</td><td style="text-align:right">${_metreFmt(sfH, 2)}</td></tr>
+            <tr><td>Installation scie à câble fond (non débouchant uniquement) (par plaque)</td><td style="text-align:right">${data.plaqueRows.length}</td><td style="text-align:right">${_metreFmt(Math.max(0, Number(syntheseState.tInstallCableFondParPlaque) || 0), 2)}</td><td style="text-align:right">${_metreFmt(data.totalFondInstallH, 2)}</td></tr>
+          <tr><td><strong>Total câble borgne</strong></td><td style="text-align:right">—</td><td style="text-align:right">—</td><td style="text-align:right"><strong>${_metreFmt(sfH + data.totalFondInstallH, 2)}</strong></td></tr>
+        </tbody>
         <tfoot><tr><th style="text-align:right" colspan="1">Sous-total</th><th style="text-align:right">${_metreFmt(data.bottomAreaM2, 2)}</th><th colspan="2" style="text-align:left">m² sciage partie basse</th></tr></tfoot>
       </table>
       ${rows}
@@ -10449,19 +11216,52 @@ function renderParams() {
           <div class="synth-param-sep synth-param-span3"></div>
 
           <div class="synth-param-group">
+            <label class="synth-label">Temps manutention plaques (mode non débouchant / normal) (h/plaque)</label>
+            <input type="number" id="params-t-manut-plaque-nondeb" class="synth-input" min="0" step="0.1" value="${p.tManutentionPlaqueNonDebouchant}" />
+          </div>
+          <div class="synth-param-group">
+            <label class="synth-label">Temps manutention blocs (mode débouchant) (h/plaque)</label>
+            <input type="number" id="params-t-manut-plaque" class="synth-input" min="0" step="0.1" value="${p.tManutentionPlaque}" />
+          </div>
+          <div class="synth-param-group">
+            <label class="synth-label">Installation scie à câble par trait (rainurage si épaisseur >= seuil) (h/trait)</label>
+            <input type="number" id="params-t-install-cable-trait" class="synth-input" min="0" step="0.1" value="${p.tInstallCableParTrait}" />
+          </div>
+          <div class="synth-param-group">
+            <label class="synth-label">Temps installation scie à câble (mode bloc débouchant) (h/plaque)</label>
+            <input type="number" id="params-t-install-cable-bloc" class="synth-input" min="0" step="0.1" value="${p.tInstallCableBlocParPlaque}" />
+          </div>
+          <div class="synth-param-group">
+            <label class="synth-label">Installation scie à câble par plaque (fond borgne = non débouchant) (h/plaque)</label>
+            <input type="number" id="params-t-install-cable-fond" class="synth-input" min="0" step="0.1" value="${p.tInstallCableFondParPlaque}" />
+          </div>
+          <div class="synth-param-group">
+            <label class="synth-label">Installation scie au disque par trait (rainurage mural si épaisseur < seuil) (h/trait)</label>
+            <input type="number" id="params-t-install-disque-trait" class="synth-input" min="0" step="0.1" value="${p.tInstallDisqueParTrait}" />
+          </div>
+          <div class="synth-param-group">
+            <label class="synth-label">Temps installation carotteuse (h/carotte)</label>
+            <input type="number" id="params-t-install-carotteuse" class="synth-input" min="0" step="0.1" value="${p.tInstallCarotteuseParCarotte}" />
+          </div>
+          <div class="synth-param-group">
+            <label class="synth-label">Temps retrait carotte (h/carotte)</label>
+            <input type="number" id="params-t-retrait-carotte" class="synth-input" min="0" step="0.1" value="${p.tRetraitCarotte}" />
+          </div>
+
+          <div class="synth-param-group">
             <label class="synth-label">Seuil épaisseur sciage (mm)</label>
             <input type="number" id="params-sciage-seuil" class="synth-input" min="1" step="1" value="${p.sciageEpaisseurSeuilMm}" />
           </div>
           <div class="synth-param-group">
-            <label class="synth-label">Scie murale (h/ml) si épaisseur &lt; seuil</label>
+            <label class="synth-label">Productivité sciage murale (h/ml) si épaisseur &lt; seuil</label>
             <input type="number" id="params-sciage-murale" class="synth-input" min="0" step="0.1" value="${p.sciageMuraleHParMl}" />
           </div>
           <div class="synth-param-group">
-            <label class="synth-label">Scie à câble (h/ml) si épaisseur &ge; seuil</label>
+            <label class="synth-label">Productivité sciage à câble (h/m²) si épaisseur &ge; seuil</label>
             <input type="number" id="params-sciage-cable" class="synth-input" min="0" step="0.1" value="${p.sciageCableHParMl}" />
           </div>
           <div class="synth-param-group">
-            <label class="synth-label">Sous-faces si non débouchant Z4 (h/m²)</label>
+            <label class="synth-label">Taux découpage borgne (mode fond, h/m²)</label>
             <input type="number" id="params-sousface-hm2" class="synth-input" min="0" step="0.1" value="${p.sousFaceHParM2}" />
           </div>
 
@@ -10472,9 +11272,13 @@ function renderParams() {
 
         </div>
         <p class="synth-formula-note">
-          Calepinage plaques : Sciage = périmètre unique (ml) &times; taux scie (murale/câble selon épaisseur),
-          Carottages = profondeur totale (m) &times; rendement tableau (h/m) selon Ø carottage,
-          Sous-faces = surface couche (m²) &times; taux sous-faces si non débouchant Z4.
+          Calepinage plaques : Sciage = périmètre unique (ml) &times; taux scie (murale/câble selon épaisseur) + installation scie (h/trait),
+          Rainurage/normal : si épaisseur &lt; seuil =&gt; scie murale + installation disque ; si épaisseur &ge; seuil =&gt; scie câble + installation câble rainurage,
+          Débouchant = mode bloc (installation bloc + manutention bloc), cumulable avec rainurage ; Non débouchant = manutention plaques,
+          Borgne/fond = toujours sciage à câble (non débouchant) + installation câble fond,
+          Carottages = profondeur totale (m) &times; rendement tableau (h/m) selon Ø carottage + installation carotteuse (h/carotte) + retrait carotte (h/carotte),
+          Les valeurs TR2 sont ignorées,
+          Sciage à câble borgne = surface couche (m²) &times; taux câble borgne.
         </p>
       </div>
     </div>
@@ -10507,6 +11311,14 @@ function renderParams() {
   _bindChantierNum('params-sciage-seuil',   'sciageEpaisseurSeuilMm', 1);
   _bindChantierNum('params-sciage-murale',  'sciageMuraleHParMl');
   _bindChantierNum('params-sciage-cable',   'sciageCableHParMl');
+  _bindChantierNum('params-t-manut-plaque-nondeb', 'tManutentionPlaqueNonDebouchant');
+  _bindChantierNum('params-t-manut-plaque', 'tManutentionPlaque');
+  _bindChantierNum('params-t-install-cable-trait', 'tInstallCableParTrait');
+  _bindChantierNum('params-t-install-cable-bloc', 'tInstallCableBlocParPlaque');
+  _bindChantierNum('params-t-install-cable-fond', 'tInstallCableFondParPlaque');
+  _bindChantierNum('params-t-install-disque-trait', 'tInstallDisqueParTrait');
+  _bindChantierNum('params-t-install-carotteuse', 'tInstallCarotteuseParCarotte');
+  _bindChantierNum('params-t-retrait-carotte', 'tRetraitCarotte');
   _bindChantierNum('params-sousface-hm2',   'sousFaceHParM2');
 
   document.getElementById('params-pdf-footer-text')?.addEventListener('change', e => {
@@ -10707,7 +11519,7 @@ function renderSynthese() {
   // Rendement forcé (null = non activé) — maintenant par couche, passé en paramètre
 
   // ── helper : groupe les trous par diamètre et calcule les stats ────────────
-  function _computeBloc(holes, maillage, isZ4, profDefault, fcOverride) {
+  function _computeBloc(holes, maillage, isZ4, profDefault, fcOverride, extra = {}) {
     const fcGlob = (fcOverride != null && fcOverride > 0) ? fcOverride : null;
     // Grouper par (diamètre + rendOverride) pour séparer les overrides par sous-zone
     const byGroup = new Map();
@@ -10740,8 +11552,21 @@ function renderSynthese() {
                   profUnitMm: Math.round(g.profTotale / g.count),
                   profTotM, rendRaw, rend, tpsBrut, masse });
     }
-    const tpsUnit = p.tPause + p.tExtraction;
-    const tpsGlob = totalTpsBrut + p.tInstallation + p.tRepli + tpsUnit * totalCount;
+    const plaqueCount = Math.max(0, Number(extra.plaqueCount) || 0);
+    const cutCount = Math.max(0, Number(extra.cutCount) || 0);
+    const useMurale = extra.useMurale === true;
+    const isDebouchant = extra.isDebouchant === true;
+    const manutentionH = isDebouchant
+      ? (plaqueCount * Math.max(0, Number(p.tManutentionPlaque) || 0))
+      : (plaqueCount * Math.max(0, Number(p.tManutentionPlaqueNonDebouchant) || 0));
+    const installMuraleH = useMurale ? (cutCount * Math.max(0, Number(p.tInstallDisqueParTrait) || 0)) : 0;
+    const installRainurageH = useMurale ? 0 : (cutCount * Math.max(0, Number(p.tInstallCableParTrait) || 0));
+    const installBlocH = isDebouchant ? (plaqueCount * Math.max(0, Number(p.tInstallCableBlocParPlaque) || 0)) : 0;
+    const installSawH = installMuraleH + installRainurageH + installBlocH;
+    const fondSetupH = isDebouchant ? 0 : (plaqueCount * Math.max(0, Number(p.tInstallCableFondParPlaque) || 0));
+    const installCarotteuseH = totalCount * Math.max(0, Number(p.tInstallCarotteuseParCarotte) || 0);
+    const retraitCarotteH = totalCount * Math.max(0, Number(p.tRetraitCarotte) || 0);
+    const tpsGlob = totalTpsBrut + manutentionH + installSawH + fondSetupH + installCarotteuseH + retraitCarotteH;
     return { totalCount, totalProfM, totalTpsBrut, tpsGlob, totalMasse, rows };
   }
 
@@ -10798,12 +11623,17 @@ function renderSynthese() {
   const coucheCards = state.couches.map(couche => {
     const s    = couche.surface;
     const fc   = s.rendementForce ? (s.rendementForceVal || 5) : null;
+    const sciageSeuil = Math.max(1, Number(p.sciageEpaisseurSeuilMm) || 400);
+    const plaques = Array.isArray(couche.plaques) ? couche.plaques : [];
+    const cutCount = _metreCollectSciageSegments(plaques).length;
+    const useMurale = Math.max(0, Number(s.profondeur) || 0) < sciageSeuil;
     const bloc = _computeBloc(
       couche.holes,
       s.maillageFerraillage || 'moyen',
-      !!s.debouchantZ4,
+      !s.debouchantZ4,
       s.profondeur || 200,
-      fc
+      fc,
+      { plaqueCount: plaques.length, cutCount, useMurale, isDebouchant: !!s.debouchantZ4 }
     );
     const matStats = _computeCoucheMaterialStats(couche);
     grandCount        += bloc.totalCount;
@@ -10832,12 +11662,17 @@ function renderSynthese() {
   const psCards = state.plansSpeciaux.map(ps => {
     const s    = ps.surface;
     const fc   = s.rendementForce ? (s.rendementForceVal || 5) : null;
+    const sciageSeuil = Math.max(1, Number(p.sciageEpaisseurSeuilMm) || 400);
+    const plaques = Array.isArray(ps.plaques) ? ps.plaques : [];
+    const cutCount = _metreCollectSciageSegments(plaques).length;
+    const useMurale = Math.max(0, Number(s.profondeur) || 0) < sciageSeuil;
     const bloc = _computeBloc(
       ps.holes || [],
       s.maillageFerraillage || 'moyen',
-      !!s.debouchantZ4,
+      !s.debouchantZ4,
       s.profondeur || 200,
-      fc
+      fc,
+      { plaqueCount: plaques.length, cutCount, useMurale, isDebouchant: !!s.debouchantZ4 }
     );
     const matStats = _computeCoucheMaterialStats(ps);
     grandCount        += bloc.totalCount;

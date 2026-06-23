@@ -748,6 +748,57 @@
           </div>
         </div>
 
+        <!-- ── Modale génération procédurale ── -->
+        <div id="modal-algo-proc-overlay" class="modal-overlay" hidden aria-modal="true" role="dialog" aria-labelledby="modal-algo-proc-title">
+          <div class="modal-box" style="max-width:560px">
+            <h2 id="modal-algo-proc-title" style="margin:0 0 10px;font-size:1.1rem;color:#1f3447">Génération procédurale successive</h2>
+            <p style="margin:0 0 14px;color:#5d7388;font-size:0.88rem;line-height:1.5">Choisissez un mode unique puis lancez la recherche. Les champs affichés sont adaptés au mode, sans saisies redondantes.</p>
+            <form id="algo-proc-dialog-form" class="algo-proc-dialog-grid">
+              <label>
+                Mode de recherche
+                <select id="algo-proc-mode" required>
+                  <option value="fixed">Nombre fixe d'itérations</option>
+                  <option value="target">Atteindre un objectif pendant Y secondes</option>
+                </select>
+              </label>
+
+              <label>
+                Objectif principal
+                <select id="algo-proc-objective" required>
+                  <option value="time">Temps travaux minimal</option>
+                  <option value="plates">Nombre de plaques minimal</option>
+                </select>
+              </label>
+
+              <div id="algo-proc-fixed-group">
+                <label>
+                  Nombre d'itérations
+                  <input id="algo-proc-iterations" type="number" min="1" max="100000" step="1" value="200" required />
+                </label>
+              </div>
+
+              <div id="algo-proc-target-group" hidden>
+                <label>
+                  Seuil cible
+                  <input id="algo-proc-threshold" type="number" min="0.1" step="0.1" value="12" />
+                </label>
+                <label>
+                  Durée max (secondes)
+                  <input id="algo-proc-seconds" type="number" min="1" max="120" step="1" value="5" />
+                </label>
+                <p id="algo-proc-target-hint" class="algo-proc-target-hint">Arrêt anticipé si le meilleur scénario atteint le seuil cible avant la fin du délai.</p>
+              </div>
+
+              <p id="algo-proc-dialog-error" class="algo-proc-dialog-error" hidden></p>
+
+              <div class="algo-proc-dialog-actions">
+                <button type="button" id="algo-proc-cancel" class="btn">Annuler</button>
+                <button type="submit" id="algo-proc-start" class="btn btn-primary">Lancer la génération</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
         <!-- ── Éditeur géométrie de dalle (modal plein écran) ────────────────── -->
         <div id="modal-draw-overlay" class="modal-overlay" hidden aria-modal="true" role="dialog">
           <div class="modal-draw-box">

@@ -620,6 +620,60 @@ button:focus-visible {
 .modal-sw-table td { padding:5px 6px; border-bottom:1px solid #f0f2f5; }
 .modal-sw-table tr:last-child td { border-bottom:none; }
 
+.algo-proc-dialog-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.algo-proc-dialog-grid label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #2d4a5e;
+}
+
+.algo-proc-dialog-grid input,
+.algo-proc-dialog-grid select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #c8d8e8;
+  border-radius: 6px;
+  font-size: 0.92rem;
+  color: #1f3447;
+  background: #ffffff;
+}
+
+.algo-proc-dialog-grid input:focus,
+.algo-proc-dialog-grid select:focus {
+  outline: none;
+  border-color: #2b6cb0;
+  box-shadow: 0 0 0 2px rgba(43, 108, 176, 0.14);
+}
+
+.algo-proc-target-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #6b8099;
+  line-height: 1.45;
+}
+
+.algo-proc-dialog-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fff2f2;
+  border: 1px solid #f3c1c1;
+  color: #9d1f1f;
+  font-size: 0.84rem;
+}
+
+.algo-proc-dialog-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .status {
   min-height: 1.2rem;
   margin: 10px 0 6px;
